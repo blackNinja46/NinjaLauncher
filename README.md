@@ -196,8 +196,9 @@ Before publishing a release:
 
 1. Set the same semantic version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json`.
-2. Add `TAURI_SIGNING_PRIVATE_KEY` to the repository's GitHub Actions secrets.
-3. Keep the private updater key backed up securely and never commit it.
+2. Add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to the repository's
+   GitHub Actions secrets.
+3. Keep the private updater key and its password backed up securely and never commit them.
 4. Commit the version change and push a matching tag, for example `app-v0.2.0`.
 5. Test the generated installers, then publish the draft release.
 
