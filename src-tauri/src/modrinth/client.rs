@@ -25,8 +25,29 @@ impl ModrinthClient {
         game_version: &str,
         loader: &str,
     ) -> Result<SearchResponse, CommandError> {
+        self.search_projects(query, game_version, loader, "mod")
+            .await
+    }
+
+    pub async fn search_modpacks(
+        &self,
+        query: &str,
+        game_version: &str,
+        loader: &str,
+    ) -> Result<SearchResponse, CommandError> {
+        self.search_projects(query, game_version, loader, "modpack")
+            .await
+    }
+
+    async fn search_projects(
+        &self,
+        query: &str,
+        game_version: &str,
+        loader: &str,
+        project_type: &str,
+    ) -> Result<SearchResponse, CommandError> {
         let facets = serde_json::to_string(&vec![
-            vec!["project_type:mod".to_string()],
+            vec![format!("project_type:{project_type}")],
             vec![format!("versions:{game_version}")],
             vec![format!("categories:{loader}")],
         ])?;
@@ -43,6 +64,10 @@ impl ModrinthClient {
             .await?
             .error_for_status()?;
         Ok(response.json().await?)
+    }
+
+    pub fn http(&self) -> &reqwest::Client {
+        &self.0
     }
 
     pub async fn versions(

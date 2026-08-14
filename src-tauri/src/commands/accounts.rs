@@ -1,5 +1,5 @@
 use crate::{
-    auth::microsoft::{self, DeviceCode, PublicAccount},
+    auth::microsoft::{self, AccountState, DeviceCode, PublicAccount},
     error::CommandError,
     storage::paths::PathManager,
 };
@@ -11,19 +11,39 @@ pub fn get_account(paths: State<'_, PathManager>) -> Result<Option<PublicAccount
 }
 
 #[tauri::command]
-pub async fn begin_microsoft_login(client_id: String) -> Result<DeviceCode, CommandError> {
-    microsoft::begin(&client_id).await
+pub fn get_accounts(paths: State<'_, PathManager>) -> Result<AccountState, CommandError> {
+    microsoft::state(&paths)
+}
+
+#[tauri::command]
+pub async fn begin_microsoft_login() -> Result<DeviceCode, CommandError> {
+    microsoft::begin().await
 }
 
 #[tauri::command]
 pub async fn complete_microsoft_login(
-    client_id: String,
     device_code: DeviceCode,
     paths: State<'_, PathManager>,
 ) -> Result<PublicAccount, CommandError> {
-    let account = microsoft::complete(&client_id, &device_code).await?;
+    let account = microsoft::complete(&device_code).await?;
     microsoft::save(&paths, &account)?;
     Ok(PublicAccount::from(&account))
+}
+
+#[tauri::command]
+pub fn switch_microsoft_account(
+    uuid: String,
+    paths: State<'_, PathManager>,
+) -> Result<PublicAccount, CommandError> {
+    microsoft::switch_account(&paths, &uuid)
+}
+
+#[tauri::command]
+pub fn remove_microsoft_account(
+    uuid: String,
+    paths: State<'_, PathManager>,
+) -> Result<AccountState, CommandError> {
+    microsoft::remove_account(&paths, &uuid)
 }
 
 #[tauri::command]

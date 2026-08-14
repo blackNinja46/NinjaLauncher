@@ -175,11 +175,10 @@ async fn latest_package(
 }
 
 async fn supports(candidate: &Path, required_major: u32) -> bool {
-    let Ok(output) = tokio::process::Command::new(candidate)
-        .arg("-version")
-        .output()
-        .await
-    else {
+    let mut command = tokio::process::Command::new(candidate);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let Ok(output) = command.arg("-version").output().await else {
         return false;
     };
     if !output.status.success() {

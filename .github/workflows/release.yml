@@ -1,0 +1,56 @@
+name: Release Ninja Launcher
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "app-v*"
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin --bundles app,dmg
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin --bundles app,dmg
+          - platform: windows-latest
+            args: --bundles nsis
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify project
+        run: bun run check
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: Ninja Launcher v__VERSION__
+          releaseBody: Download the installer for your platform. Existing installations update automatically.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

@@ -5,6 +5,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+const DEFAULT_MICROSOFT_CLIENT_ID: &str = "f06a20d6-185a-472d-bc99-897f2e7d3535";
+
+pub fn client_id() -> &'static str {
+    option_env!("NINJA_MICROSOFT_CLIENT_ID")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_MICROSOFT_CLIENT_ID)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
@@ -27,11 +35,58 @@ impl Account {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicAccount {
     pub username: String,
     pub uuid: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountState {
+    pub accounts: Vec<PublicAccount>,
+    pub active_uuid: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountStore {
+    active_uuid: Option<String>,
+    accounts: Vec<Account>,
+}
+
+impl AccountStore {
+    fn empty() -> Self {
+        Self {
+            active_uuid: None,
+            accounts: Vec::new(),
+        }
+    }
+
+    fn normalize(&mut self) {
+        let active_exists = self
+            .active_uuid
+            .as_ref()
+            .is_some_and(|uuid| self.accounts.iter().any(|account| &account.uuid == uuid));
+        if !active_exists {
+            self.active_uuid = self.accounts.first().map(|account| account.uuid.clone());
+        }
+    }
+
+    fn active(&self) -> Option<&Account> {
+        let active_uuid = self.active_uuid.as_deref()?;
+        self.accounts
+            .iter()
+            .find(|account| account.uuid == active_uuid)
+    }
+
+    fn public_state(&self) -> AccountState {
+        AccountState {
+            accounts: self.accounts.iter().map(PublicAccount::from).collect(),
+            active_uuid: self.active_uuid.clone(),
+        }
+    }
 }
 
 impl From<&Account> for PublicAccount {
@@ -98,16 +153,11 @@ struct MinecraftProfile {
     name: String,
 }
 
-pub async fn begin(client_id: &str) -> Result<DeviceCode, CommandError> {
-    if client_id.trim().is_empty() {
-        return Err(CommandError::new(
-            "Add a Microsoft OAuth client ID in Settings first.",
-        ));
-    }
+pub async fn begin() -> Result<DeviceCode, CommandError> {
     Ok(reqwest::Client::new()
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
         .form(&[
-            ("client_id", client_id),
+            ("client_id", client_id()),
             ("scope", "XboxLive.signin offline_access"),
         ])
         .send()
@@ -117,7 +167,7 @@ pub async fn begin(client_id: &str) -> Result<DeviceCode, CommandError> {
         .await?)
 }
 
-pub async fn complete(client_id: &str, code: &DeviceCode) -> Result<Account, CommandError> {
+pub async fn complete(code: &DeviceCode) -> Result<Account, CommandError> {
     let client = reqwest::Client::new();
     let deadline = now() + code.expires_in;
     let microsoft = loop {
@@ -129,7 +179,7 @@ pub async fn complete(client_id: &str, code: &DeviceCode) -> Result<Account, Com
             .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                ("client_id", client_id),
+                ("client_id", client_id()),
                 ("device_code", &code.device_code),
             ])
             .send()
@@ -157,12 +207,12 @@ pub async fn complete(client_id: &str, code: &DeviceCode) -> Result<Account, Com
     exchange_for_minecraft(&client, microsoft).await
 }
 
-pub async fn refresh(client_id: &str, refresh_token: &str) -> Result<Account, CommandError> {
+pub async fn refresh(refresh_token: &str) -> Result<Account, CommandError> {
     let client = reqwest::Client::new();
     let response = client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
         .form(&[
-            ("client_id", client_id),
+            ("client_id", client_id()),
             ("scope", "XboxLive.signin offline_access"),
             ("refresh_token", refresh_token),
             ("grant_type", "refresh_token"),
@@ -272,19 +322,73 @@ fn minecraft_login_error(status: reqwest::StatusCode, body: &str) -> CommandErro
 }
 
 pub fn load(paths: &PathManager) -> Result<Option<Account>, CommandError> {
-    if !paths.account_file().is_file() {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::from_slice(&std::fs::read(
-        paths.account_file(),
-    )?)?))
+    Ok(load_store(paths)?.active().cloned())
 }
 
 pub fn save(paths: &PathManager, account: &Account) -> Result<(), CommandError> {
+    let mut store = load_store(paths)?;
+    if let Some(existing) = store
+        .accounts
+        .iter_mut()
+        .find(|existing| existing.uuid == account.uuid)
+    {
+        *existing = account.clone();
+    } else {
+        store.accounts.push(account.clone());
+    }
+    store.active_uuid = Some(account.uuid.clone());
+    write_store(paths, &store)
+}
+
+pub fn state(paths: &PathManager) -> Result<AccountState, CommandError> {
+    Ok(load_store(paths)?.public_state())
+}
+
+pub fn switch_account(paths: &PathManager, uuid: &str) -> Result<PublicAccount, CommandError> {
+    let mut store = load_store(paths)?;
+    let account = store
+        .accounts
+        .iter()
+        .find(|account| account.uuid == uuid)
+        .ok_or_else(|| CommandError::new("The selected Minecraft account no longer exists."))?;
+    let public_account = PublicAccount::from(account);
+    store.active_uuid = Some(uuid.to_owned());
+    write_store(paths, &store)?;
+    Ok(public_account)
+}
+
+pub fn remove_account(paths: &PathManager, uuid: &str) -> Result<AccountState, CommandError> {
+    let mut store = load_store(paths)?;
+    store.accounts.retain(|account| account.uuid != uuid);
+    store.normalize();
+    write_store(paths, &store)?;
+    Ok(store.public_state())
+}
+
+fn load_store(paths: &PathManager) -> Result<AccountStore, CommandError> {
+    if !paths.account_file().is_file() {
+        return Ok(AccountStore::empty());
+    }
+    let contents = std::fs::read(paths.account_file())?;
+    let mut store = match serde_json::from_slice::<AccountStore>(&contents) {
+        Ok(store) => store,
+        Err(_) => {
+            let account = serde_json::from_slice::<Account>(&contents)?;
+            AccountStore {
+                active_uuid: Some(account.uuid.clone()),
+                accounts: vec![account],
+            }
+        }
+    };
+    store.normalize();
+    Ok(store)
+}
+
+fn write_store(paths: &PathManager, store: &AccountStore) -> Result<(), CommandError> {
     let target = paths.account_file();
     let temporary = target.with_extension("json.tmp");
     let mut file = std::fs::File::create(&temporary)?;
-    file.write_all(&serde_json::to_vec(account)?)?;
+    file.write_all(&serde_json::to_vec(store)?)?;
     file.sync_all()?;
     #[cfg(unix)]
     {
@@ -296,8 +400,11 @@ pub fn save(paths: &PathManager, account: &Account) -> Result<(), CommandError> 
 }
 
 pub fn logout(paths: &PathManager) -> Result<(), CommandError> {
-    if paths.account_file().is_file() {
-        std::fs::remove_file(paths.account_file())?;
+    let mut store = load_store(paths)?;
+    if let Some(active_uuid) = store.active_uuid.clone() {
+        store.accounts.retain(|account| account.uuid != active_uuid);
+        store.normalize();
+        write_store(paths, &store)?;
     }
     Ok(())
 }
@@ -311,7 +418,34 @@ pub fn now() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{minecraft_login_error, Account};
+    use super::{
+        client_id, load, minecraft_login_error, remove_account, save, state, switch_account,
+        Account,
+    };
+    use crate::storage::paths::PathManager;
+
+    fn test_paths(name: &str) -> PathManager {
+        let root = std::env::temp_dir().join(format!(
+            "ninjalauncher-account-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        PathManager::new(root).expect("test path manager")
+    }
+
+    fn account(username: &str, uuid: &str) -> Account {
+        Account {
+            username: username.into(),
+            uuid: uuid.into(),
+            access_token: format!("{username}-token"),
+            refresh_token: format!("{username}-refresh"),
+            expires_at: 123,
+        }
+    }
+
+    #[test]
+    fn bundled_client_id_is_a_valid_uuid() {
+        uuid::Uuid::parse_str(client_id()).expect("bundled Microsoft client ID should be a UUID");
+    }
 
     #[test]
     fn demo_account_does_not_contain_persisted_credentials() {
@@ -334,5 +468,41 @@ mod tests {
         assert!(!error
             .message
             .contains("online service could not be reached"));
+    }
+
+    #[test]
+    fn migrates_a_legacy_single_account_file() {
+        let paths = test_paths("migration");
+        let legacy = account("Alex", "alex-uuid");
+        std::fs::write(
+            paths.account_file(),
+            serde_json::to_vec(&legacy).expect("serialize legacy account"),
+        )
+        .expect("write legacy account");
+
+        assert_eq!(
+            load(&paths).expect("load").expect("active").username,
+            "Alex"
+        );
+        let state = state(&paths).expect("state");
+        assert_eq!(state.active_uuid.as_deref(), Some("alex-uuid"));
+        assert_eq!(state.accounts.len(), 1);
+    }
+
+    #[test]
+    fn saves_switches_and_removes_multiple_accounts() {
+        let paths = test_paths("multiple");
+        save(&paths, &account("Alex", "alex-uuid")).expect("save Alex");
+        save(&paths, &account("Steve", "steve-uuid")).expect("save Steve");
+        assert_eq!(
+            load(&paths).expect("load").expect("active").username,
+            "Steve"
+        );
+
+        let switched = switch_account(&paths, "alex-uuid").expect("switch account");
+        assert_eq!(switched.username, "Alex");
+        let remaining = remove_account(&paths, "alex-uuid").expect("remove account");
+        assert_eq!(remaining.active_uuid.as_deref(), Some("steve-uuid"));
+        assert_eq!(remaining.accounts.len(), 1);
     }
 }

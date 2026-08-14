@@ -3,20 +3,24 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import Sidebar from "$lib/components/layout/Sidebar.svelte";
+  import WindowTitlebar from "$lib/components/layout/WindowTitlebar.svelte";
   import HomePage from "$lib/components/launcher/HomePage.svelte";
   import ModsPage from "$lib/components/mods/ModsPage.svelte";
+  import ModpacksPage from "$lib/components/modpacks/ModpacksPage.svelte";
   import InstancesPage from "$lib/components/instances/InstancesPage.svelte";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import LogsPage from "$lib/components/logs/LogsPage.svelte";
   import AccountDialog from "$lib/components/account/AccountDialog.svelte";
   import {
-    getAccount,
+    getAccounts,
     getLauncherOverview,
     getSettings,
+    installAvailableUpdate,
     listInstances,
     listSupportedVersions,
     messageFromError,
     saveInstance,
+    type AppUpdateProgress,
   } from "$lib/api/tauri";
   import type {
     Account,
@@ -41,7 +45,6 @@
     language: "en",
     theme: "dark",
     checkForUpdates: true,
-    microsoftClientId: null,
   });
   let overview = $state<LauncherOverview>({
     appDataDirectory: "NinjaLauncher",
@@ -51,11 +54,30 @@
   let instances = $state<LauncherInstance[]>([]);
   let selectedId = $state("default-fabric");
   let account = $state<Account | null>(null);
+  let accounts = $state<Account[]>([]);
   let accountOpen = $state(false);
   let versions = $state<SupportedVersion[]>([]);
   let gameLogs = $state<GameLogEntry[]>([]);
   let gameRunning = $state(false);
+  let appUpdate = $state<AppUpdateProgress | null>(null);
+  let updateError = $state("");
+  let showWindowsTitlebar = $state(false);
   let instance = $derived(instances.find((item) => item.id === selectedId) ?? instances[0]);
+  let updatePercent = $derived(
+    appUpdate?.totalBytes && appUpdate.downloadedBytes
+      ? Math.min(100, Math.round((appUpdate.downloadedBytes / appUpdate.totalBytes) * 100))
+      : 0,
+  );
+
+  async function runAutomaticUpdate() {
+    try {
+      const installing = await installAvailableUpdate((progress) => (appUpdate = progress));
+      if (!installing) appUpdate = null;
+    } catch (cause) {
+      appUpdate = null;
+      updateError = `Automatic update failed: ${messageFromError(cause)}`;
+    }
+  }
 
   async function refreshInstances() {
     instances = await listInstances();
@@ -77,9 +99,16 @@
     }
   }
 
+  async function finishModpackInstall(created: LauncherInstance) {
+    await refreshInstances();
+    selectedId = created.id;
+    activePage = "home";
+  }
+
   onMount(() => {
     let unlisteners: (() => void)[] = [];
     if ("__TAURI_INTERNALS__" in window) {
+      showWindowsTitlebar = navigator.userAgent.includes("Windows");
       Promise.all([
         listen<GameLogEntry>("launcher://log", (event) => {
           gameLogs = [...gameLogs.slice(-1999), event.payload];
@@ -96,15 +125,18 @@
       getSettings(),
       getLauncherOverview(),
       listInstances(),
-      getAccount(),
+      getAccounts(),
       listSupportedVersions(),
     ])
-      .then(([loadedSettings, loadedOverview, loadedInstances, loadedAccount, loadedVersions]) => {
+      .then(([loadedSettings, loadedOverview, loadedInstances, loadedAccounts, loadedVersions]) => {
         settings = loadedSettings;
         overview = loadedOverview;
         instances = loadedInstances;
-        account = loadedAccount;
+        accounts = loadedAccounts.accounts;
+        account =
+          accounts.find((item) => item.uuid === loadedAccounts.activeUuid) ?? accounts[0] ?? null;
         versions = loadedVersions;
+        if (loadedSettings.checkForUpdates) void runAutomaticUpdate();
       })
       .catch((error) => (startupError = messageFromError(error)))
       .finally(() => (loading = false));
@@ -116,77 +148,134 @@
   ><meta name="description" content="Ninja Launcher for Minecraft Java Edition" /></svelte:head
 >
 
-<div class="launcher-shell flex h-screen min-h-[640px] text-[#f1f7ff]">
-  <Sidebar
-    active={activePage}
-    {account}
-    modCount={instance?.mods.length ?? 0}
-    onnavigate={(page) => (activePage = page)}
-    onaccount={() => (accountOpen = true)}
-  />
-  <main class="pixel-grid min-w-0 flex-1 overflow-y-auto">
-    <div class="mx-auto w-full max-w-[1040px] px-9 py-8">
-      {#if loading}
-        <div class="grid min-h-[500px] place-items-center">
-          <div class="flex flex-col items-center gap-5">
-            <img
-              src="/brand/ninja-launcher-mark.png"
-              alt="Ninja Launcher"
-              class="h-20 w-24 animate-pulse object-contain"
-            />
-            <div class="h-2 w-36 overflow-hidden bg-blue-950">
-              <div class="h-full w-2/3 animate-pulse bg-cyan-400"></div>
+<div
+  class="launcher-shell flex h-screen min-h-[640px] flex-col overflow-hidden text-[#f1f7ff] {showWindowsTitlebar
+    ? 'border border-cyan-300/20'
+    : ''}"
+>
+  {#if showWindowsTitlebar}<WindowTitlebar />{/if}
+  <div class="flex min-h-0 flex-1">
+    <Sidebar
+      active={activePage}
+      {account}
+      modCount={instance?.mods.length ?? 0}
+      onnavigate={(page) => (activePage = page)}
+      onaccount={() => (accountOpen = true)}
+    />
+    <main class="pixel-grid min-w-0 flex-1 overflow-y-auto">
+      <div class="mx-auto w-full max-w-[1040px] px-9 py-8">
+        {#if loading}
+          <div class="grid min-h-[500px] place-items-center">
+            <div class="flex flex-col items-center gap-5">
+              <img
+                src="/brand/ninja-launcher-mark.png"
+                alt="Ninja Launcher"
+                class="h-20 w-24 animate-pulse object-contain"
+              />
+              <div class="h-2 w-36 overflow-hidden bg-blue-950">
+                <div class="h-full w-2/3 animate-pulse bg-cyan-400"></div>
+              </div>
             </div>
           </div>
-        </div>
-      {:else}
-        {#if startupError}<div
-            class="mb-5 rounded-lg border border-red-400/20 bg-red-400/10 px-4 py-3 text-xs text-red-300"
-          >
-            {startupError}
-          </div>{/if}
-        {#if activePage === "instances"}<InstancesPage
-            {instances}
-            {versions}
-            {selectedId}
-            onselect={(id) => (selectedId = id)}
-            onchanged={refreshInstances}
-          />
-        {:else if activePage === "logs"}<LogsPage
-            logs={gameLogs}
-            running={gameRunning}
-            onclear={() => (gameLogs = [])}
-          />
-        {:else if activePage === "settings"}<SettingsPage bind:settings {overview} />
-        {:else if !instance}<div class="mc-panel p-10 text-center">
-            <h2 class="block-title text-lg uppercase">No instance selected</h2>
-            <p class="mt-2 text-sm text-[#7595b7]">
-              Create an instance to start Minecraft or manage mods.
-            </p>
-            <button
-              onclick={() => (activePage = "instances")}
-              class="mc-primary mt-6 px-5 py-3 text-xs font-bold">Create instance</button
+        {:else}
+          {#if startupError}<div
+              class="mb-5 rounded-lg border border-red-400/20 bg-red-400/10 px-4 py-3 text-xs text-red-300"
             >
-          </div>
-        {:else if activePage === "home"}<HomePage
-            {instance}
-            {versions}
-            signedIn={account !== null}
-            onopenmods={() => (activePage = "mods")}
-            onversionchange={changeVersion}
-          />
-        {:else}<ModsPage
-            {instance}
-            {versions}
-            onchanged={refreshInstances}
-            onversionchange={changeVersion}
-          />{/if}
-      {/if}
-    </div>
-  </main>
+              {startupError}
+            </div>{/if}
+          {#if updateError}<div
+              class="mb-5 border border-amber-400/20 bg-amber-400/[0.08] px-4 py-3 text-xs text-amber-200"
+            >
+              {updateError}
+            </div>{/if}
+          {#if activePage === "instances"}<InstancesPage
+              {instances}
+              {versions}
+              {selectedId}
+              onselect={(id) => (selectedId = id)}
+              onchanged={refreshInstances}
+            />
+          {:else if activePage === "logs"}<LogsPage
+              logs={gameLogs}
+              running={gameRunning}
+              onclear={() => (gameLogs = [])}
+            />
+          {:else if activePage === "settings"}<SettingsPage bind:settings {overview} />
+          {:else if activePage === "modpacks"}<ModpacksPage
+              minecraftVersion={instance?.minecraftVersion ??
+                versions.at(-1)?.minecraftVersion ??
+                "26.2"}
+              {versions}
+              oninstalled={finishModpackInstall}
+            />
+          {:else if !instance}<div class="mc-panel p-10 text-center">
+              <h2 class="block-title text-lg uppercase">No instance selected</h2>
+              <p class="mt-2 text-sm text-[#7595b7]">
+                Create an instance to start Minecraft or manage mods.
+              </p>
+              <button
+                onclick={() => (activePage = "instances")}
+                class="mc-primary mt-6 px-5 py-3 text-xs font-bold">Create instance</button
+              >
+            </div>
+          {:else if activePage === "home"}<HomePage
+              {instance}
+              {versions}
+              signedIn={account !== null}
+              onopenmods={() => (activePage = "mods")}
+              onversionchange={changeVersion}
+            />
+          {:else}<ModsPage
+              {instance}
+              {versions}
+              onchanged={refreshInstances}
+              onversionchange={changeVersion}
+            />{/if}
+        {/if}
+      </div>
+    </main>
+  </div>
 </div>
 {#if accountOpen}<AccountDialog
     bind:account
-    {settings}
+    bind:accounts
     onclose={() => (accountOpen = false)}
   />{/if}
+{#if appUpdate && ["downloading", "installing", "restarting"].includes(appUpdate.phase)}
+  <div class="fixed inset-0 z-[80] grid place-items-center bg-[#010612]/90 p-6">
+    <section class="mc-panel w-full max-w-md overflow-hidden" aria-live="assertive">
+      <div class="border-b border-cyan-300/10 bg-[#071a35] px-6 py-5">
+        <div class="mb-4 flex items-center gap-4">
+          <img src="/brand/ninja-launcher-mark.png" alt="" class="h-12 w-14 object-contain" />
+          <div>
+            <p class="text-[9px] font-bold uppercase tracking-[.15em] text-cyan-300/60">
+              Automatic update
+            </p>
+            <h2 class="block-title mt-1 text-lg uppercase">
+              Ninja Launcher {appUpdate.version}
+            </h2>
+          </div>
+        </div>
+        <p class="text-xs text-[#86a8c7]">
+          {appUpdate.phase === "downloading"
+            ? `Downloading update… ${updatePercent}%`
+            : appUpdate.phase === "installing"
+              ? "Installing the verified update…"
+              : "Restarting Ninja Launcher…"}
+        </p>
+      </div>
+      <div class="bg-[#030c1c] p-6">
+        <div class="h-2 overflow-hidden bg-blue-950">
+          <div
+            class="h-full bg-cyan-400 transition-all duration-300"
+            style={`width: ${appUpdate.phase === "downloading" ? Math.max(4, updatePercent) : 100}%`}
+          ></div>
+        </div>
+        <p class="mt-3 text-[10px] leading-5 text-[#557896]">
+          The update was signed by Ninja Launcher. Do not close the application while it is being
+          installed.
+        </p>
+      </div>
+    </section>
+  </div>
+{/if}

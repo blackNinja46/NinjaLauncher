@@ -16,6 +16,8 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let paths = PathManager::from_app(app.handle())?;
             paths.ensure_directories()?;
@@ -45,9 +47,15 @@ pub fn run() {
             commands::mods::remove_mod,
             commands::mods::set_mod_enabled,
             commands::mods::set_mod_version,
+            commands::modpacks::search_modpacks,
+            commands::modpacks::list_modpack_versions,
+            commands::modpacks::install_modpack,
             commands::accounts::get_account,
+            commands::accounts::get_accounts,
             commands::accounts::begin_microsoft_login,
             commands::accounts::complete_microsoft_login,
+            commands::accounts::switch_microsoft_account,
+            commands::accounts::remove_microsoft_account,
             commands::accounts::logout,
             commands::minecraft::launch_game
         ])

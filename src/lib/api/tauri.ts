@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import type {
   Account,
+  AccountState,
   DeviceCode,
   LauncherInstance,
   LauncherOverview,
@@ -22,11 +25,46 @@ const defaultSettings: LauncherSettings = {
   language: "en",
   theme: "dark",
   checkForUpdates: true,
-  microsoftClientId: null,
 };
 
 function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+export interface AppUpdateProgress {
+  phase: "checking" | "downloading" | "installing" | "restarting" | "current";
+  version?: string;
+  downloadedBytes?: number;
+  totalBytes?: number;
+}
+
+export async function installAvailableUpdate(
+  onprogress: (progress: AppUpdateProgress) => void,
+): Promise<boolean> {
+  if (!inTauri()) return false;
+  onprogress({ phase: "checking" });
+  const update = await check();
+  if (!update) {
+    onprogress({ phase: "current" });
+    return false;
+  }
+
+  let downloadedBytes = 0;
+  let totalBytes: number | undefined;
+  await update.downloadAndInstall((event: DownloadEvent) => {
+    if (event.event === "Started") {
+      totalBytes = event.data.contentLength;
+      onprogress({ phase: "downloading", version: update.version, downloadedBytes, totalBytes });
+    } else if (event.event === "Progress") {
+      downloadedBytes += event.data.chunkLength;
+      onprogress({ phase: "downloading", version: update.version, downloadedBytes, totalBytes });
+    } else {
+      onprogress({ phase: "installing", version: update.version, downloadedBytes, totalBytes });
+    }
+  });
+  onprogress({ phase: "restarting", version: update.version, downloadedBytes, totalBytes });
+  await relaunch();
+  return true;
 }
 
 export async function listInstances(): Promise<LauncherInstance[]> {
@@ -88,12 +126,49 @@ export const setModVersion = (
   minecraftVersion: string,
   versionId: string | null,
 ) => invoke<void>("set_mod_version", { instanceId, projectId, minecraftVersion, versionId });
+export const searchModpacks = (query: string, minecraftVersion: string, loader = "fabric") =>
+  inTauri()
+    ? invoke<ModrinthSearchResponse>("search_modpacks", { query, minecraftVersion, loader })
+    : Promise.resolve({ hits: [], total_hits: 0 });
+export const listModpackVersions = (
+  projectId: string,
+  minecraftVersion: string,
+  loader = "fabric",
+) =>
+  inTauri()
+    ? invoke<ModrinthVersion[]>("list_modpack_versions", {
+        projectId,
+        minecraftVersion,
+        loader,
+      })
+    : Promise.resolve([]);
+export const installModpack = (
+  projectId: string,
+  versionId: string | null,
+  name: string,
+  iconUrl: string | null,
+  minecraftVersion: string,
+) =>
+  invoke<LauncherInstance>("install_modpack", {
+    projectId,
+    versionId,
+    name,
+    iconUrl,
+    minecraftVersion,
+  });
 export const getAccount = () =>
   inTauri() ? invoke<Account | null>("get_account") : Promise.resolve(null);
-export const beginMicrosoftLogin = (clientId: string) =>
-  invoke<DeviceCode>("begin_microsoft_login", { clientId });
-export const completeMicrosoftLogin = (clientId: string, deviceCode: DeviceCode) =>
-  invoke<Account>("complete_microsoft_login", { clientId, deviceCode });
+export const getAccounts = () =>
+  inTauri()
+    ? invoke<AccountState>("get_accounts")
+    : Promise.resolve({ accounts: [], activeUuid: null });
+export const beginMicrosoftLogin = () => invoke<DeviceCode>("begin_microsoft_login");
+export const completeMicrosoftLogin = (deviceCode: DeviceCode) =>
+  invoke<Account>("complete_microsoft_login", { deviceCode });
+export const switchMicrosoftAccount = (uuid: string) =>
+  invoke<Account>("switch_microsoft_account", { uuid });
+export const removeMicrosoftAccount = (uuid: string) =>
+  invoke<AccountState>("remove_microsoft_account", { uuid });
 export const logout = () => invoke<void>("logout");
 export const launchGame = (instanceId: string, demo = false) =>
   invoke<void>("launch_game", { instanceId, demo });

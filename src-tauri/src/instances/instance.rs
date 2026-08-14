@@ -32,6 +32,19 @@ pub struct InstanceConfig {
     pub loader_version: String,
     #[serde(default)]
     pub mods: Vec<SelectedMod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modpack: Option<InstalledModpack>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledModpack {
+    pub project_id: String,
+    pub version_id: String,
+    pub name: String,
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub file_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -53,6 +66,7 @@ impl InstanceConfig {
             loader: "fabric".into(),
             loader_version: DEFAULT_FABRIC_VERSION.into(),
             mods: Vec::new(),
+            modpack: None,
         }
     }
 }

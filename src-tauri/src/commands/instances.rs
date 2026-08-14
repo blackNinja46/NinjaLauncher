@@ -24,6 +24,17 @@ pub fn save_instance(
     instance: InstanceConfig,
     paths: State<'_, PathManager>,
 ) -> Result<InstanceConfig, CommandError> {
+    if let Ok(existing) = manager::load(&paths, &instance.id) {
+        if existing.modpack.is_some()
+            && (existing.minecraft_version != instance.minecraft_version
+                || existing.loader != instance.loader
+                || existing.loader_version != instance.loader_version)
+        {
+            return Err(CommandError::new(
+                "The Minecraft and loader versions of an installed modpack are controlled by the pack.",
+            ));
+        }
+    }
     manager::save(&paths, &instance)?;
     Ok(instance)
 }
@@ -42,6 +53,7 @@ pub fn create_instance(
         loader: "fabric".into(),
         loader_version,
         mods: Vec::new(),
+        modpack: None,
     };
     manager::save(&paths, &instance)?;
     Ok(instance)
@@ -59,9 +71,7 @@ pub fn duplicate_instance(
     manager::save(&paths, &copy)?;
     let source_directory = manager::instance_dir(&paths, &id)?;
     let copy_directory = manager::instance_dir(&paths, &copy.id)?;
-    for child in ["config", "saves", "resourcepacks", "shaderpacks"] {
-        copy_dir_contents(&source_directory.join(child), &copy_directory.join(child))?;
-    }
+    copy_instance_contents(&source_directory, &copy_directory)?;
     Ok(copy)
 }
 
@@ -93,6 +103,30 @@ fn copy_dir_contents(
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
+        let destination = target.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_contents(&entry.path(), &destination)?;
+        } else {
+            std::fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_instance_contents(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), CommandError> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if matches!(
+            name.as_ref(),
+            "instance.json" | "instance.json.tmp" | "logs" | "crash-reports"
+        ) {
+            continue;
+        }
         let destination = target.join(entry.file_name());
         if entry.file_type()?.is_dir() {
             copy_dir_contents(&entry.path(), &destination)?;

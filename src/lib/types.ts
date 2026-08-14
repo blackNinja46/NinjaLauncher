@@ -1,4 +1,4 @@
-export type NavigationItem = "home" | "mods" | "instances" | "logs" | "settings";
+export type NavigationItem = "home" | "mods" | "modpacks" | "instances" | "logs" | "settings";
 export type Theme = "dark" | "light" | "system";
 
 export interface LauncherSettings {
@@ -11,7 +11,6 @@ export interface LauncherSettings {
   language: string;
   theme: Theme;
   checkForUpdates: boolean;
-  microsoftClientId: string | null;
 }
 
 export interface LauncherOverview {
@@ -34,6 +33,15 @@ export interface LauncherInstance {
   loader: "fabric";
   loaderVersion: string;
   mods: SelectedMod[];
+  modpack?: InstalledModpack;
+}
+
+export interface InstalledModpack {
+  projectId: string;
+  versionId: string;
+  name: string;
+  iconUrl: string | null;
+  fileCount: number;
 }
 
 export interface SupportedVersion {
@@ -75,6 +83,10 @@ export interface ModrinthSearchResponse {
 export interface Account {
   username: string;
   uuid: string;
+}
+export interface AccountState {
+  accounts: Account[];
+  activeUuid: string | null;
 }
 export interface DeviceCode {
   device_code: string;

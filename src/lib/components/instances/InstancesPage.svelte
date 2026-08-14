@@ -86,7 +86,11 @@
     >
       <div class="flex items-center gap-4">
         <div class="grid size-14 place-items-center overflow-hidden bg-[#031237]">
-          <img src="/brand/ninja-launcher-mark.png" alt="" class="size-13 object-contain" />
+          <img
+            src={instance.modpack?.iconUrl ?? "/brand/ninja-launcher-mark.png"}
+            alt=""
+            class="size-13 object-contain"
+          />
         </div>
         <button onclick={() => onselect(instance.id)} class="flex-1 text-left"
           ><div class="flex items-center gap-2">
@@ -95,10 +99,15 @@
                 class="bg-accent-500/15 px-2 py-.5 text-[9px] font-bold text-accent-400"
                 >SELECTED</span
               >{/if}
+            {#if instance.modpack}<span
+                class="border border-violet-300/20 bg-violet-400/10 px-2 py-.5 text-[9px] font-bold text-violet-200"
+                >MODPACK</span
+              >{/if}
           </div>
           <p class="mt-1 text-xs text-[#7899b8]">
-            Minecraft {instance.minecraftVersion} · Fabric {instance.loaderVersion} · {instance.mods
-              .length} mods
+            Minecraft {instance.minecraftVersion} · Fabric {instance.loaderVersion} · {instance.modpack
+              ? `${instance.modpack.fileCount} pack files`
+              : `${instance.mods.length} mods`}
           </p></button
         >
         <button

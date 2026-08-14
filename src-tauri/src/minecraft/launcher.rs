@@ -65,8 +65,7 @@ pub async fn launch(
     };
     let settings = config::load(paths)?;
     if !demo && account.expires_at <= microsoft::now() + 60 {
-        let client_id = settings.microsoft_client_id.as_deref().ok_or_else(|| CommandError::new("Your Minecraft session expired. Add the Microsoft client ID in Settings and sign in again."))?;
-        account = microsoft::refresh(client_id, &account.refresh_token).await?;
+        account = microsoft::refresh(&account.refresh_token).await?;
         microsoft::save(paths, &account)?;
     }
     let client = reqwest::Client::builder()
@@ -633,6 +632,8 @@ async fn start_process(
         game.push("--demo".into());
     }
     let mut command = tokio::process::Command::new(java);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     command
         .args(jvm.into_iter().map(&replace))
         .arg(&fabric.main_class)

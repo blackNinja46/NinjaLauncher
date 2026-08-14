@@ -79,7 +79,7 @@
           id="home-version"
           value={instance.minecraftVersion}
           onchange={(event) => onversionchange(event.currentTarget.value)}
-          disabled={launching}
+          disabled={launching || Boolean(instance.modpack)}
           class="mc-field px-3 py-2 text-xs font-bold text-blue-50 outline-none disabled:opacity-50"
         >
           {#each versions as version}<option value={version.minecraftVersion}
@@ -106,6 +106,9 @@
           class="mc-secondary px-5 py-3.5 text-sm font-bold text-[#ccecff]">Manage mods</button
         >
       </div>
+      {#if instance.modpack}<p class="mt-3 text-[11px] text-violet-200/70">
+          Modrinth pack · {instance.modpack.name} · {instance.modpack.fileCount} managed files
+        </p>{/if}
       {#if !signedIn}<p class="mt-3 text-[11px] text-[#8094ad]">
           Demo mode · Local test worlds only · Online multiplayer unavailable
         </p>{/if}
@@ -129,7 +132,9 @@
         Enabled mods
       </div>
       <div class="mt-1.5 text-sm font-medium">
-        {instance.mods.filter((mod) => mod.enabled).length} mods
+        {instance.modpack
+          ? `${instance.modpack.fileCount} pack files`
+          : `${instance.mods.filter((mod) => mod.enabled).length} mods`}
       </div>
     </div>
   </div>

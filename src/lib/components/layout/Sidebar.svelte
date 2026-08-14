@@ -18,6 +18,7 @@
   const items: { id: NavigationItem; label: string }[] = [
     { id: "home", label: "Home" },
     { id: "mods", label: "Mods" },
+    { id: "modpacks", label: "Modpacks" },
     { id: "instances", label: "Instances" },
     { id: "logs", label: "Logs" },
     { id: "settings", label: "Settings" },

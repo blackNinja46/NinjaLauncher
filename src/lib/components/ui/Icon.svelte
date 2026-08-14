@@ -21,6 +21,9 @@
   {:else if name === "mods"}<path
       d="M8.5 3.5 12 7l3.5-3.5 5 5L17 12l3.5 3.5-5 5L12 17l-3.5 3.5-5-5L7 12 3.5 8.5z"
     /><circle cx="12" cy="12" r="2.2" />
+  {:else if name === "modpacks"}<path d="m4 7 8-4 8 4-8 4z" /><path
+      d="m4 7v10l8 4 8-4V7M12 11v10"
+    /><path d="m8 9 8-4" />
   {:else if name === "instances"}<rect x="3" y="4" width="18" height="16" rx="3" /><path
       d="M8 4v16M8 9h13"
     />

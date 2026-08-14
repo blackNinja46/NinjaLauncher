@@ -15,7 +15,6 @@ pub struct LauncherSettings {
     pub language: String,
     pub theme: Theme,
     pub check_for_updates: bool,
-    pub microsoft_client_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -38,7 +37,6 @@ impl Default for LauncherSettings {
             language: "en".into(),
             theme: Theme::Dark,
             check_for_updates: true,
-            microsoft_client_id: None,
         }
     }
 }

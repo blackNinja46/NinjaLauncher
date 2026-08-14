@@ -120,14 +120,14 @@
     </h2>
     <div class="mc-panel overflow-hidden">
       <SettingRow
-        title="Microsoft OAuth client ID"
-        description="Public client ID from your Microsoft Entra app registration; required for Minecraft sign-in."
+        title="Microsoft sign-in"
+        description="Uses Ninja Launcher's built-in public OAuth application."
       >
-        <input
-          bind:value={settings.microsoftClientId}
-          placeholder="00000000-0000-…"
-          class="mc-field w-56 px-3 py-2 text-xs text-[#d8e4f3] outline-none"
-        />
+        <span
+          class="border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs font-bold text-emerald-200"
+        >
+          Built in
+        </span>
       </SettingRow>
       <SettingRow
         title="Check for updates"

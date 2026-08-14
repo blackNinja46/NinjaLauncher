@@ -308,7 +308,7 @@
       <select
         value={instance.minecraftVersion}
         onchange={(event) => changeMinecraftVersion(event.currentTarget.value)}
-        disabled={changingMinecraftVersion || Boolean(busyProjectId)}
+        disabled={changingMinecraftVersion || Boolean(busyProjectId) || Boolean(instance.modpack)}
         class="mc-field min-w-32 px-3 py-2.5 text-xs font-bold text-blue-50 outline-none disabled:cursor-wait disabled:opacity-50"
         aria-label="Minecraft version for this instance"
       >
@@ -350,6 +350,28 @@
   >
     {error}
   </div>{/if}
+
+{#if instance.modpack}
+  <div
+    class="mb-4 flex items-start gap-3 border border-violet-300/25 bg-violet-400/[0.07] px-4 py-3"
+  >
+    {#if instance.modpack.iconUrl}<img
+        src={instance.modpack.iconUrl}
+        alt=""
+        class="size-9 shrink-0 object-cover"
+      />{:else}<span
+        class="grid size-9 shrink-0 place-items-center bg-violet-400/10 text-violet-200"
+        ><Icon name="modpacks" size={18} /></span
+      >{/if}
+    <div>
+      <p class="text-xs font-bold text-violet-100">Managed by {instance.modpack.name}</p>
+      <p class="mt-1 text-[11px] leading-5 text-violet-200/60">
+        The pack installed {instance.modpack.fileCount} verified files. Its Minecraft and Fabric versions
+        stay locked; additional personal mods can still be added below.
+      </p>
+    </div>
+  </div>
+{/if}
 
 {#if view === "installed" && (incompatibleCount > 0 || !conflictReport.compatible)}
   <div
