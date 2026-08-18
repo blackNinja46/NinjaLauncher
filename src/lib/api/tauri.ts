@@ -22,9 +22,11 @@ const defaultSettings: LauncherSettings = {
   closeOnLaunch: false,
   reopenOnExit: true,
   showLogsOnLaunch: true,
+  showSnapshots: false,
   language: "en",
   theme: "dark",
   checkForUpdates: true,
+  discordRichPresence: true,
 };
 
 function inTauri(): boolean {
@@ -85,10 +87,27 @@ export const listSupportedVersions = (): Promise<SupportedVersion[]> =>
   inTauri()
     ? invoke("list_supported_versions")
     : Promise.resolve(
-        ["1.21.11", "26.1", "26.1.1", "26.1.2", "26.2"].map((minecraftVersion) => ({
-          minecraftVersion,
-          fabricLoaderVersion: "0.19.3",
-        })),
+        [
+          { minecraftVersion: "26.3-snapshot-9", versionType: "snapshot" as const },
+          ...[
+            "26.2",
+            "26.1.2",
+            "26.1.1",
+            "26.1",
+            "1.21.11",
+            "1.21.10",
+            "1.21.9",
+            "1.21.8",
+            "1.21.7",
+            "1.21.6",
+            "1.21.5",
+            "1.21.4",
+            "1.21.3",
+            "1.21.2",
+            "1.21.1",
+            "1.21",
+          ].map((minecraftVersion) => ({ minecraftVersion, versionType: "release" as const })),
+        ].map((version) => ({ ...version, fabricLoaderVersion: "0.19.3" })),
       );
 export const saveInstance = (instance: LauncherInstance) =>
   invoke<LauncherInstance>("save_instance", { instance });
@@ -98,8 +117,10 @@ export const duplicateInstance = (id: string) =>
   invoke<LauncherInstance>("duplicate_instance", { id });
 export const deleteInstance = (id: string) => invoke<void>("delete_instance", { id });
 export const openInstanceFolder = (id: string) => invoke<void>("open_instance_folder", { id });
-export const searchMods = (query: string, minecraftVersion: string, loader: string) =>
-  invoke<ModrinthSearchResponse>("search_mods", { query, minecraftVersion, loader });
+export const searchMods = (query: string, minecraftVersion: string, loader: string, offset = 0) =>
+  inTauri()
+    ? invoke<ModrinthSearchResponse>("search_mods", { query, minecraftVersion, loader, offset })
+    : Promise.resolve({ hits: [], total_hits: 0 });
 export const getModDetails = (projectIds: string[]) =>
   inTauri() ? invoke<ModrinthProject[]>("get_mod_details", { projectIds }) : Promise.resolve([]);
 export const listModVersions = (projectId: string, minecraftVersion: string, loader: string) =>
@@ -126,19 +147,14 @@ export const setModVersion = (
   minecraftVersion: string,
   versionId: string | null,
 ) => invoke<void>("set_mod_version", { instanceId, projectId, minecraftVersion, versionId });
-export const searchModpacks = (query: string, minecraftVersion: string, loader = "fabric") =>
+export const searchModpacks = (query: string, offset = 0, loader = "fabric") =>
   inTauri()
-    ? invoke<ModrinthSearchResponse>("search_modpacks", { query, minecraftVersion, loader })
+    ? invoke<ModrinthSearchResponse>("search_modpacks", { query, loader, offset })
     : Promise.resolve({ hits: [], total_hits: 0 });
-export const listModpackVersions = (
-  projectId: string,
-  minecraftVersion: string,
-  loader = "fabric",
-) =>
+export const listModpackVersions = (projectId: string, loader = "fabric") =>
   inTauri()
     ? invoke<ModrinthVersion[]>("list_modpack_versions", {
         projectId,
-        minecraftVersion,
         loader,
       })
     : Promise.resolve([]);
@@ -147,14 +163,12 @@ export const installModpack = (
   versionId: string | null,
   name: string,
   iconUrl: string | null,
-  minecraftVersion: string,
 ) =>
   invoke<LauncherInstance>("install_modpack", {
     projectId,
     versionId,
     name,
     iconUrl,
-    minecraftVersion,
   });
 export const getAccount = () =>
   inTauri() ? invoke<Account | null>("get_account") : Promise.resolve(null);

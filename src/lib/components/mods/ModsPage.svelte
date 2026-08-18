@@ -2,6 +2,9 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
   import Icon from "$lib/components/ui/Icon.svelte";
+  import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
+  import Pagination from "$lib/components/ui/Pagination.svelte";
+  import { untrack } from "svelte";
   import {
     addMod,
     analyzeModConflicts,
@@ -54,6 +57,9 @@
   let loading = $state(false);
   let error = $state("");
   let searched = $state(false);
+  let page = $state(0);
+  let total = $state(0);
+  let searchRequest = 0;
   let busyProjectId = $state("");
   let changingMinecraftVersion = $state(false);
   let searchContext = $state("");
@@ -119,14 +125,17 @@
 
   $effect(() => {
     const context = `${instance.id}:${instance.minecraftVersion}:${instance.loader}`;
-    if (searchContext && searchContext !== context) {
-      results = [];
-      searched = false;
-      searchVersionsByProject = {};
-      searchVersionSelections = {};
-      loadingSearchVersions = {};
-    }
+    if (searchContext === context) return;
     searchContext = context;
+    query = "";
+    results = [];
+    searched = false;
+    page = 0;
+    total = 0;
+    searchVersionsByProject = {};
+    searchVersionSelections = {};
+    loadingSearchVersions = {};
+    untrack(() => void loadPage(0, ""));
   });
 
   $effect(() => {
@@ -177,20 +186,37 @@
     });
   });
 
-  async function search(event?: Event) {
-    event?.preventDefault();
+  async function loadPage(nextPage: number, searchQuery = query) {
+    const request = ++searchRequest;
     loading = true;
     error = "";
     searched = true;
     searchVersionsByProject = {};
     searchVersionSelections = {};
     try {
-      results = (await searchMods(query, instance.minecraftVersion, instance.loader)).hits;
+      const response = await searchMods(
+        searchQuery,
+        instance.minecraftVersion,
+        instance.loader,
+        nextPage * 20,
+      );
+      if (request !== searchRequest) return;
+      results = response.hits;
+      total = response.total_hits;
+      page = nextPage;
     } catch (cause) {
+      if (request !== searchRequest) return;
+      results = [];
+      total = 0;
       error = messageFromError(cause);
     } finally {
-      loading = false;
+      if (request === searchRequest) loading = false;
     }
+  }
+
+  function search(event: SubmitEvent) {
+    event.preventDefault();
+    void loadPage(0);
   }
 
   async function toggleSearchResult(mod: ModrinthHit) {
@@ -305,17 +331,17 @@
       <span class="mb-1.5 block text-[9px] font-bold uppercase tracking-[.12em] text-[#63809a]"
         >Minecraft version</span
       >
-      <select
+      <CustomSelect
         value={instance.minecraftVersion}
-        onchange={(event) => changeMinecraftVersion(event.currentTarget.value)}
+        options={versions.map((version) => ({
+          value: version.minecraftVersion,
+          label: `Minecraft ${version.minecraftVersion}${version.versionType === "snapshot" ? " · Snapshot" : ""}`,
+        }))}
+        onchange={(value) => changeMinecraftVersion(String(value))}
         disabled={changingMinecraftVersion || Boolean(busyProjectId) || Boolean(instance.modpack)}
-        class="mc-field min-w-32 px-3 py-2.5 text-xs font-bold text-blue-50 outline-none disabled:cursor-wait disabled:opacity-50"
-        aria-label="Minecraft version for this instance"
-      >
-        {#each versions as version}
-          <option value={version.minecraftVersion}>Minecraft {version.minecraftVersion}</option>
-        {/each}
-      </select>
+        ariaLabel="Minecraft version for this instance"
+        class="min-w-48 text-xs font-bold text-blue-50"
+      />
     </label>
     {#if view === "installed"}<button
         onclick={() => (view = "search")}
@@ -454,29 +480,31 @@
               </div>
             </div>
             <div class="min-w-0">
-              <select
+              <CustomSelect
                 value={mod.versionOverrides?.[instance.minecraftVersion] ?? ""}
-                onchange={(event) => changeModVersion(mod.projectId, event.currentTarget.value)}
+                options={[
+                  { value: "", label: "Automatic · latest compatible" },
+                  ...(compatibility.state === "incompatible" &&
+                  mod.versionOverrides?.[instance.minecraftVersion]
+                    ? [
+                        {
+                          value: mod.versionOverrides[instance.minecraftVersion],
+                          label: "Selected version · incompatible",
+                        },
+                      ]
+                    : []),
+                  ...(availableVersions ?? []).map((version) => ({
+                    value: version.id,
+                    label: `${version.name}${version.versionType === "release" ? "" : ` · ${version.versionType}`}`,
+                  })),
+                ]}
+                onchange={(value) => changeModVersion(mod.projectId, String(value))}
                 disabled={!availableVersions ||
                   !availableVersions.length ||
                   busyProjectId === mod.projectId}
-                aria-label={`Version of ${mod.name} for Minecraft ${instance.minecraftVersion}`}
-                class="mc-field w-full truncate px-2.5 py-2 text-[11px] text-[#c8e5f7] outline-none disabled:cursor-wait disabled:opacity-60"
-              >
-                <option value="">Automatic · latest compatible</option>
-                {#if compatibility.state === "incompatible" && mod.versionOverrides?.[instance.minecraftVersion]}
-                  <option value={mod.versionOverrides[instance.minecraftVersion]}>
-                    Selected version · incompatible
-                  </option>
-                {/if}
-                {#each availableVersions ?? [] as version}
-                  <option value={version.id}>
-                    {version.name}{version.versionType === "release"
-                      ? ""
-                      : ` · ${version.versionType}`}
-                  </option>
-                {/each}
-              </select>
+                ariaLabel={`Version of ${mod.name} for Minecraft ${instance.minecraftVersion}`}
+                class="w-full text-[11px] text-[#c8e5f7]"
+              />
               <p class="mt-1.5 text-[9px] text-[#55748f]">
                 {versionLoadErrors[mod.projectId]
                   ? "Could not load compatible versions"
@@ -486,23 +514,6 @@
               </p>
             </div>
             <div class="min-w-0">
-              <div
-                class="mb-2 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider {compatibility.state ===
-                'incompatible'
-                  ? 'text-red-300'
-                  : compatibility.state === 'compatible'
-                    ? 'text-emerald-300'
-                    : 'text-[#70879c]'}"
-              >
-                <span
-                  class="size-1.5 {compatibility.state === 'incompatible'
-                    ? 'bg-red-400 shadow-[0_0_7px_#f87171]'
-                    : compatibility.state === 'compatible'
-                      ? 'bg-emerald-400'
-                      : 'bg-slate-500'}"
-                ></span>
-                <span class="truncate" title={compatibility.message}>{compatibility.message}</span>
-              </div>
               <button
                 role="switch"
                 aria-checked={mod.enabled}
@@ -525,6 +536,16 @@
                     : 'text-[#718096]'}">{mod.enabled ? "Enabled" : "Disabled"}</span
                 ></button
               >
+              <div
+                class="mt-2 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider {compatibility.state ===
+                'incompatible'
+                  ? 'text-red-300'
+                  : compatibility.state === 'compatible'
+                    ? 'text-[#698ba9]'
+                    : 'text-[#70879c]'}"
+              >
+                <span class="truncate" title={compatibility.message}>{compatibility.message}</span>
+              </div>
             </div>
             <button
               onclick={() => removeInstalled(mod.projectId)}
@@ -608,29 +629,33 @@
             </div>
           </div>
           <div class="flex w-60 shrink-0 items-center gap-2">
-            <select
+            <CustomSelect
               value={installed.has(mod.projectId)
                 ? (instance.mods.find((item) => item.projectId === mod.projectId)
                     ?.versionOverrides?.[instance.minecraftVersion] ?? "")
                 : (searchVersionSelections[mod.projectId] ?? "")}
-              onfocus={() => loadSearchVersions(mod.projectId)}
-              onclick={() => loadSearchVersions(mod.projectId)}
-              onchange={(event) => changeSearchVersion(mod.projectId, event.currentTarget.value)}
+              options={[
+                {
+                  value: "",
+                  label: loadingSearchVersions[mod.projectId]
+                    ? "Loading versions…"
+                    : "Automatic version",
+                },
+                ...(
+                  versionsByProject[mod.projectId] ??
+                  searchVersionsByProject[mod.projectId] ??
+                  []
+                ).map((version) => ({
+                  value: version.id,
+                  label: `${version.name}${version.versionType === "release" ? "" : ` · ${version.versionType}`}`,
+                })),
+              ]}
+              onopen={() => loadSearchVersions(mod.projectId)}
+              onchange={(value) => changeSearchVersion(mod.projectId, String(value))}
               disabled={busyProjectId === mod.projectId}
-              aria-label={`Version of ${mod.title} for Minecraft ${instance.minecraftVersion}`}
-              class="mc-field min-w-0 flex-1 truncate px-2.5 py-2 text-[10px] text-[#c8e5f7] outline-none disabled:opacity-50"
-            >
-              <option value="">
-                {loadingSearchVersions[mod.projectId] ? "Loading versions…" : "Automatic version"}
-              </option>
-              {#each versionsByProject[mod.projectId] ?? searchVersionsByProject[mod.projectId] ?? [] as version}
-                <option value={version.id}>
-                  {version.name}{version.versionType === "release"
-                    ? ""
-                    : ` · ${version.versionType}`}
-                </option>
-              {/each}
-            </select>
+              ariaLabel={`Version of ${mod.title} for Minecraft ${instance.minecraftVersion}`}
+              class="min-w-0 flex-1 text-[10px] text-[#c8e5f7]"
+            />
             <button
               onclick={() => toggleSearchResult(mod)}
               disabled={busyProjectId === mod.projectId}
@@ -644,6 +669,7 @@
           </div>
         </article>{/each}
     </div>
+    <Pagination {page} {total} {loading} onchange={(nextPage) => loadPage(nextPage)} />
   {:else}<div
       class="rounded-xl border border-dashed border-white/[0.09] p-12 text-center text-sm text-[#737884]"
     >

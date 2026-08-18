@@ -2,30 +2,27 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
   import Icon from "$lib/components/ui/Icon.svelte";
-  import {
-    installModpack,
-    listModpackVersions,
-    messageFromError,
-    searchModpacks,
-  } from "$lib/api/tauri";
+  import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
+  import Pagination from "$lib/components/ui/Pagination.svelte";
+  import { onMount } from "svelte";
+  import { listModpackVersions, messageFromError, searchModpacks } from "$lib/api/tauri";
   import type {
-    LauncherInstance,
+    ModpackInstallation,
     ModrinthHit,
     ModrinthVersion,
     SupportedVersion,
   } from "$lib/types";
 
   let {
-    minecraftVersion,
     versions,
-    oninstalled,
+    installation,
+    oninstall,
   }: {
-    minecraftVersion: string;
     versions: SupportedVersion[];
-    oninstalled: (instance: LauncherInstance) => Promise<void>;
+    installation: ModpackInstallation | null;
+    oninstall: (pack: ModrinthHit, versionId: string) => Promise<void>;
   } = $props();
 
-  let selectedMinecraftVersion = $state("");
   let query = $state("");
   let results = $state<ModrinthHit[]>([]);
   let versionsByProject = $state<Record<string, ModrinthVersion[]>>({});
@@ -33,68 +30,80 @@
   let loadingVersions = $state<Record<string, boolean>>({});
   let loading = $state(false);
   let searched = $state(false);
-  let busyProjectId = $state("");
+  let page = $state(0);
+  let total = $state(0);
+  let searchRequest = 0;
   let error = $state("");
+  let busyProjectId = $derived(installation?.phase === "installing" ? installation.projectId : "");
 
-  $effect(() => {
-    if (!selectedMinecraftVersion) selectedMinecraftVersion = minecraftVersion;
-  });
-
-  async function search(event?: Event) {
-    event?.preventDefault();
+  async function loadPage(nextPage: number, searchQuery = query) {
+    const request = ++searchRequest;
     loading = true;
     searched = true;
     error = "";
     versionsByProject = {};
     selectedVersions = {};
     try {
-      results = (await searchModpacks(query, selectedMinecraftVersion)).hits;
+      const response = await searchModpacks(searchQuery, nextPage * 20);
+      if (request !== searchRequest) return;
+      results = response.hits;
+      total = response.total_hits;
+      page = nextPage;
     } catch (cause) {
+      if (request !== searchRequest) return;
       results = [];
+      total = 0;
       error = messageFromError(cause);
     } finally {
-      loading = false;
+      if (request === searchRequest) loading = false;
     }
   }
 
-  function changeMinecraftVersion(value: string) {
-    if (value === selectedMinecraftVersion) return;
-    selectedMinecraftVersion = value;
-    results = [];
-    versionsByProject = {};
-    selectedVersions = {};
-    searched = false;
+  function search(event: SubmitEvent) {
+    event.preventDefault();
+    void loadPage(0);
   }
 
-  async function loadVersions(projectId: string) {
-    if (versionsByProject[projectId] || loadingVersions[projectId]) return;
+  onMount(() => void loadPage(0, ""));
+
+  function minecraftVersionFor(version: ModrinthVersion): string | null {
+    return (
+      versions.find((supported) => version.gameVersions.includes(supported.minecraftVersion))
+        ?.minecraftVersion ?? null
+    );
+  }
+
+  async function loadVersions(projectId: string): Promise<ModrinthVersion[]> {
+    if (versionsByProject[projectId]) return versionsByProject[projectId];
+    if (loadingVersions[projectId]) return [];
     loadingVersions = { ...loadingVersions, [projectId]: true };
     try {
-      const available = await listModpackVersions(projectId, selectedMinecraftVersion);
+      const available = (await listModpackVersions(projectId)).filter((version) =>
+        minecraftVersionFor(version),
+      );
       versionsByProject = { ...versionsByProject, [projectId]: available };
+      return available;
     } catch (cause) {
       error = messageFromError(cause);
+      return [];
     } finally {
       loadingVersions = { ...loadingVersions, [projectId]: false };
     }
   }
 
   async function install(pack: ModrinthHit) {
-    busyProjectId = pack.projectId;
     error = "";
     try {
-      const created = await installModpack(
-        pack.projectId,
-        selectedVersions[pack.projectId] || null,
-        pack.title,
-        pack.iconUrl,
-        selectedMinecraftVersion,
-      );
-      await oninstalled(created);
+      const available = versionsByProject[pack.projectId] ?? (await loadVersions(pack.projectId));
+      const selected = selectedVersions[pack.projectId];
+      const version =
+        available.find((version) => version.id === selected) ??
+        available.find((version) => version.versionType === "release") ??
+        available[0];
+      if (!version) throw new Error("No supported Fabric version is available for this modpack.");
+      await oninstall(pack, version.id);
     } catch (cause) {
       error = messageFromError(cause);
-    } finally {
-      busyProjectId = "";
     }
   }
 
@@ -105,27 +114,10 @@
   }
 </script>
 
-<div class="flex items-start justify-between gap-5">
-  <PageHeader
-    title="Modpacks"
-    description="Install complete Fabric packs from Modrinth as isolated instances."
-  />
-  <label class="block">
-    <span class="mb-1.5 block text-[9px] font-bold uppercase tracking-[.12em] text-[#63809a]">
-      Minecraft version
-    </span>
-    <select
-      value={selectedMinecraftVersion}
-      onchange={(event) => changeMinecraftVersion(event.currentTarget.value)}
-      disabled={loading || Boolean(busyProjectId)}
-      class="mc-field min-w-36 px-3 py-2.5 text-xs font-bold text-blue-50 outline-none disabled:opacity-50"
-    >
-      {#each versions as version}
-        <option value={version.minecraftVersion}>Minecraft {version.minecraftVersion}</option>
-      {/each}
-    </select>
-  </label>
-</div>
+<PageHeader
+  title="Modpacks"
+  description="Install complete Fabric packs from Modrinth as isolated instances."
+/>
 
 <form onsubmit={search} class="mb-6 flex gap-2.5">
   <label
@@ -157,7 +149,7 @@
   <div class="mb-3 flex items-center justify-between">
     <h2 class="text-xs font-bold uppercase tracking-[.12em] text-[#7795ad]">Modrinth results</h2>
     <span class="text-[10px] uppercase tracking-wider text-[#55748f]">
-      Minecraft {selectedMinecraftVersion} · Fabric
+      Fabric modpacks · Minecraft 1.21+
     </span>
   </div>
   <div class="grid gap-4 xl:grid-cols-2">
@@ -191,28 +183,30 @@
           </div>
         </div>
         <div class="mt-auto flex items-center gap-2 pt-5">
-          <select
+          <CustomSelect
             value={selectedVersions[pack.projectId] ?? ""}
-            onfocus={() => loadVersions(pack.projectId)}
-            onclick={() => loadVersions(pack.projectId)}
-            onchange={(event) =>
+            options={[
+              {
+                value: "",
+                label: loadingVersions[pack.projectId]
+                  ? "Loading versions…"
+                  : "Latest supported release",
+              },
+              ...(versionsByProject[pack.projectId] ?? []).map((version) => ({
+                value: version.id,
+                label: `${version.name} · Minecraft ${minecraftVersionFor(version) ?? "unknown"}${version.versionType === "release" ? "" : ` · ${version.versionType}`}`,
+              })),
+            ]}
+            onopen={() => loadVersions(pack.projectId)}
+            onchange={(value) =>
               (selectedVersions = {
                 ...selectedVersions,
-                [pack.projectId]: event.currentTarget.value,
+                [pack.projectId]: String(value),
               })}
             disabled={busyProjectId === pack.projectId}
-            aria-label={`Version of ${pack.title}`}
-            class="mc-field min-w-0 flex-1 truncate px-3 py-2.5 text-[11px] text-[#c8e5f7] outline-none disabled:opacity-50"
-          >
-            <option value="">
-              {loadingVersions[pack.projectId] ? "Loading versions…" : "Latest compatible release"}
-            </option>
-            {#each versionsByProject[pack.projectId] ?? [] as version}
-              <option value={version.id}>
-                {version.name}{version.versionType === "release" ? "" : ` · ${version.versionType}`}
-              </option>
-            {/each}
-          </select>
+            ariaLabel={`Version of ${pack.title}`}
+            class="min-w-0 flex-1 text-[11px] text-[#c8e5f7]"
+          />
           <button
             onclick={() => install(pack)}
             disabled={Boolean(busyProjectId)}
@@ -225,6 +219,7 @@
       </article>
     {/each}
   </div>
+  <Pagination {page} {total} {loading} onchange={(nextPage) => loadPage(nextPage)} />
 {:else}
   <div class="mc-panel grid min-h-64 place-items-center border-dashed p-10 text-center">
     <div>
@@ -238,7 +233,7 @@
       </p>
       <p class="mt-1.5 text-xs text-[#5f7b94]">
         {searched
-          ? `Try another name or Minecraft version.`
+          ? "Try another name."
           : "Each pack is installed into a separate instance with its own configs and files."}
       </p>
     </div>

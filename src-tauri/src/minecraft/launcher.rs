@@ -1,5 +1,6 @@
 use crate::{
     auth::microsoft,
+    discord::DiscordPresence,
     downloads::manager::{self, DownloadSpec},
     error::CommandError,
     instances::{instance::InstanceConfig, manager as instance_manager},
@@ -15,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const VERSION_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -644,9 +645,10 @@ async fn start_process(
     let mut child = command
         .spawn()
         .map_err(|error| CommandError::new(format!("Minecraft could not be started: {error}")))?;
+    app.state::<DiscordPresence>()
+        .show_playing(&instance.name, &instance.minecraft_version);
     app.emit("launcher://game-started", &instance.id).ok();
     if close_on_launch {
-        use tauri::Manager;
         if let Some(window) = app.get_webview_window("main") {
             window.hide().ok();
         }
@@ -692,12 +694,12 @@ async fn start_process(
     tokio::spawn(async move {
         let result = child.wait().await;
         if reopen_on_exit {
-            use tauri::Manager;
             if let Some(window) = app.get_webview_window("main") {
                 window.show().ok();
                 window.set_focus().ok();
             }
         }
+        app.state::<DiscordPresence>().show_launcher();
         app.emit(
             "launcher://game-exited",
             result.ok().and_then(|status| status.code()),

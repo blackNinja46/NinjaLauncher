@@ -15,8 +15,8 @@ pub fn list_instances(paths: State<'_, PathManager>) -> Result<Vec<InstanceConfi
 }
 
 #[tauri::command]
-pub fn list_supported_versions() -> Vec<SupportedVersion> {
-    instance::supported_versions()
+pub async fn list_supported_versions() -> Vec<SupportedVersion> {
+    instance::supported_versions().await
 }
 
 #[tauri::command]

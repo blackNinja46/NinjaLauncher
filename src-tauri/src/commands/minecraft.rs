@@ -1,6 +1,6 @@
 use crate::{
-    error::CommandError, minecraft::launcher, modrinth::client::ModrinthClient,
-    storage::paths::PathManager,
+    discord::DiscordPresence, error::CommandError, minecraft::launcher,
+    modrinth::client::ModrinthClient, storage::paths::PathManager,
 };
 use tauri::{AppHandle, State};
 
@@ -11,6 +11,12 @@ pub async fn launch_game(
     app: AppHandle,
     paths: State<'_, PathManager>,
     modrinth: State<'_, ModrinthClient>,
+    discord: State<'_, DiscordPresence>,
 ) -> Result<(), CommandError> {
-    launcher::launch(app, &paths, &modrinth, &instance_id, demo).await
+    discord.show_launching();
+    let result = launcher::launch(app, &paths, &modrinth, &instance_id, demo).await;
+    if result.is_err() {
+        discord.show_launcher();
+    }
+    result
 }

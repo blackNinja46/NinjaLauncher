@@ -24,40 +24,47 @@ impl ModrinthClient {
         query: &str,
         game_version: &str,
         loader: &str,
+        offset: u32,
     ) -> Result<SearchResponse, CommandError> {
-        self.search_projects(query, game_version, loader, "mod")
+        self.search_projects(query, Some(game_version), loader, "mod", offset)
             .await
     }
 
     pub async fn search_modpacks(
         &self,
         query: &str,
-        game_version: &str,
         loader: &str,
+        offset: u32,
     ) -> Result<SearchResponse, CommandError> {
-        self.search_projects(query, game_version, loader, "modpack")
+        self.search_projects(query, None, loader, "modpack", offset)
             .await
     }
 
     async fn search_projects(
         &self,
         query: &str,
-        game_version: &str,
+        game_version: Option<&str>,
         loader: &str,
         project_type: &str,
+        offset: u32,
     ) -> Result<SearchResponse, CommandError> {
-        let facets = serde_json::to_string(&vec![
+        let mut facets = vec![
             vec![format!("project_type:{project_type}")],
-            vec![format!("versions:{game_version}")],
             vec![format!("categories:{loader}")],
-        ])?;
+        ];
+        if let Some(game_version) = game_version {
+            facets.push(vec![format!("versions:{game_version}")]);
+        }
+        let facets = serde_json::to_string(&facets)?;
+        let offset = offset.to_string();
         let response = self
             .0
             .get(format!("{API}/search"))
             .query(&[
                 ("query", query),
                 ("facets", &facets),
-                ("limit", "30"),
+                ("limit", "20"),
+                ("offset", &offset),
                 ("index", "relevance"),
             ])
             .send()
@@ -82,6 +89,22 @@ impl ModrinthClient {
             .0
             .get(format!("{API}/project/{project_id}/version"))
             .query(&[("game_versions", game_versions), ("loaders", loaders)])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(response.json().await?)
+    }
+
+    pub async fn versions_for_loader(
+        &self,
+        project_id: &str,
+        loader: &str,
+    ) -> Result<Vec<ProjectVersion>, CommandError> {
+        let loaders = serde_json::to_string(&[loader])?;
+        let response = self
+            .0
+            .get(format!("{API}/project/{project_id}/version"))
+            .query(&[("loaders", loaders)])
             .send()
             .await?
             .error_for_status()?;
@@ -168,6 +191,7 @@ pub struct ProjectVersionSummary {
     pub id: String,
     pub name: String,
     pub version_type: String,
+    pub game_versions: Vec<String>,
 }
 
 impl From<&ProjectVersion> for ProjectVersionSummary {
@@ -176,6 +200,7 @@ impl From<&ProjectVersion> for ProjectVersionSummary {
             id: version.id.clone(),
             name: version.name.clone(),
             version_type: version.version_type.clone(),
+            game_versions: version.game_versions.clone(),
         }
     }
 }

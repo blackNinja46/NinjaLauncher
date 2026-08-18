@@ -12,9 +12,11 @@ pub struct LauncherSettings {
     pub close_on_launch: bool,
     pub reopen_on_exit: bool,
     pub show_logs_on_launch: bool,
+    pub show_snapshots: bool,
     pub language: String,
     pub theme: Theme,
     pub check_for_updates: bool,
+    pub discord_rich_presence: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -34,9 +36,11 @@ impl Default for LauncherSettings {
             close_on_launch: false,
             reopen_on_exit: true,
             show_logs_on_launch: true,
+            show_snapshots: false,
             language: "en".into(),
             theme: Theme::Dark,
             check_for_updates: true,
+            discord_rich_presence: true,
         }
     }
 }
@@ -98,5 +102,7 @@ mod tests {
             serde_json::from_str(r#"{"allocatedMemoryMb":4096,"downloadConcurrency":4}"#)
                 .expect("old settings should remain compatible");
         assert!(settings.show_logs_on_launch);
+        assert!(!settings.show_snapshots);
+        assert!(settings.discord_rich_presence);
     }
 }

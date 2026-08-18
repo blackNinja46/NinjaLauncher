@@ -1,4 +1,4 @@
-use super::instance::{InstanceConfig, SUPPORTED_MINECRAFT_VERSIONS};
+use super::instance::{is_valid_version_id, InstanceConfig};
 use crate::{error::CommandError, storage::paths::PathManager};
 use std::{io::Write, path::PathBuf};
 
@@ -61,7 +61,7 @@ pub fn load(paths: &PathManager, id: &str) -> Result<InstanceConfig, CommandErro
 
 pub fn save(paths: &PathManager, instance: &InstanceConfig) -> Result<(), CommandError> {
     validate_id(&instance.id)?;
-    if !SUPPORTED_MINECRAFT_VERSIONS.contains(&instance.minecraft_version.as_str()) {
+    if !is_valid_version_id(&instance.minecraft_version) {
         return Err(CommandError::new(
             "This Minecraft version is not supported by Ninja Launcher.",
         ));
@@ -92,11 +92,7 @@ pub fn save(paths: &PathManager, instance: &InstanceConfig) -> Result<(), Comman
 }
 
 fn validate_version(version: &str) -> Result<(), CommandError> {
-    if version.is_empty()
-        || !version.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | '+')
-        })
-    {
+    if !is_valid_version_id(version) {
         return Err(CommandError::new(
             "The Minecraft or loader version is invalid.",
         ));

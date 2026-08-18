@@ -16,6 +16,8 @@
     getLauncherOverview,
     getSettings,
     installAvailableUpdate,
+    installModpack,
+    launchGame,
     listInstances,
     listSupportedVersions,
     messageFromError,
@@ -28,6 +30,8 @@
     LauncherInstance,
     LauncherOverview,
     LauncherSettings,
+    ModpackInstallation,
+    ModrinthHit,
     NavigationItem,
     SupportedVersion,
   } from "$lib/types";
@@ -42,9 +46,11 @@
     closeOnLaunch: false,
     reopenOnExit: true,
     showLogsOnLaunch: true,
+    showSnapshots: false,
     language: "en",
     theme: "dark",
     checkForUpdates: true,
+    discordRichPresence: true,
   });
   let overview = $state<LauncherOverview>({
     appDataDirectory: "NinjaLauncher",
@@ -56,9 +62,16 @@
   let account = $state<Account | null>(null);
   let accounts = $state<Account[]>([]);
   let accountOpen = $state(false);
-  let versions = $state<SupportedVersion[]>([]);
+  let allVersions = $state<SupportedVersion[]>([]);
+  let versions = $derived(
+    allVersions.filter((version) => settings.showSnapshots || version.versionType === "release"),
+  );
   let gameLogs = $state<GameLogEntry[]>([]);
   let gameRunning = $state(false);
+  let launching = $state(false);
+  let launcherStatus = $state("Everything is ready");
+  let launchProgress = $state<number | null>(null);
+  let modpackInstallation = $state<ModpackInstallation | null>(null);
   let appUpdate = $state<AppUpdateProgress | null>(null);
   let updateError = $state("");
   let showWindowsTitlebar = $state(false);
@@ -105,6 +118,57 @@
     activePage = "home";
   }
 
+  async function installSelectedModpack(pack: ModrinthHit, versionId: string): Promise<void> {
+    if (modpackInstallation?.phase === "installing") {
+      throw new Error("Another modpack installation is already running.");
+    }
+    const pending: ModpackInstallation = {
+      projectId: pack.projectId,
+      name: pack.title,
+      iconUrl: pack.iconUrl,
+      phase: "installing",
+    };
+    modpackInstallation = pending;
+    try {
+      const created = await installModpack(pack.projectId, versionId, pack.title, pack.iconUrl);
+      await finishModpackInstall(created);
+      modpackInstallation = null;
+    } catch (error) {
+      modpackInstallation = {
+        ...pending,
+        phase: "failed",
+        error: messageFromError(error),
+      };
+      throw error;
+    }
+  }
+
+  async function play() {
+    if (!instance || launching) return;
+    launching = true;
+    launchProgress = 3;
+    launcherStatus = account ? "Preparing instance…" : "Preparing demo instance…";
+    try {
+      await launchGame(instance.id, account === null);
+      if (launching) {
+        launching = false;
+        launchProgress = 100;
+        launcherStatus = "Minecraft is running";
+      }
+    } catch (error) {
+      launching = false;
+      launchProgress = null;
+      launcherStatus = messageFromError(error);
+    }
+  }
+
+  function dismissStartScreen() {
+    const startScreen = document.getElementById("app-start-screen");
+    if (!startScreen) return;
+    startScreen.classList.add("is-hidden");
+    window.setTimeout(() => startScreen.remove(), 260);
+  }
+
   onMount(() => {
     let unlisteners: (() => void)[] = [];
     if ("__TAURI_INTERNALS__" in window) {
@@ -113,12 +177,38 @@
         listen<GameLogEntry>("launcher://log", (event) => {
           gameLogs = [...gameLogs.slice(-1999), event.payload];
         }),
+        listen<{ phase: string; message: string }>("launcher://status", (event) => {
+          launcherStatus = event.payload.message;
+          const progressByPhase: Record<string, number> = {
+            validate: 8,
+            mods: 24,
+            minecraft: 42,
+            java: 58,
+            downloads: 74,
+            launch: 94,
+          };
+          launchProgress = Math.max(
+            launchProgress ?? 0,
+            progressByPhase[event.payload.phase] ?? launchProgress ?? 3,
+          );
+        }),
         listen("launcher://game-started", () => {
           gameLogs = [];
           gameRunning = true;
+          launching = false;
+          launchProgress = 100;
+          launcherStatus = "Minecraft is running";
           if (settings.showLogsOnLaunch) activePage = "logs";
         }),
-        listen("launcher://game-exited", () => (gameRunning = false)),
+        listen<number | null>("launcher://game-exited", (event) => {
+          gameRunning = false;
+          launching = false;
+          launchProgress = null;
+          launcherStatus =
+            event.payload === 0
+              ? "Minecraft closed normally"
+              : `Minecraft exited with code ${event.payload ?? "unknown"}`;
+        }),
       ]).then((listeners) => (unlisteners = listeners));
     }
     Promise.all([
@@ -135,11 +225,14 @@
         accounts = loadedAccounts.accounts;
         account =
           accounts.find((item) => item.uuid === loadedAccounts.activeUuid) ?? accounts[0] ?? null;
-        versions = loadedVersions;
+        allVersions = loadedVersions;
         if (loadedSettings.checkForUpdates) void runAutomaticUpdate();
       })
       .catch((error) => (startupError = messageFromError(error)))
-      .finally(() => (loading = false));
+      .finally(() => {
+        loading = false;
+        requestAnimationFrame(dismissStartScreen);
+      });
     return () => unlisteners.forEach((unlisten) => unlisten());
   });
 </script>
@@ -192,6 +285,7 @@
               {instances}
               {versions}
               {selectedId}
+              installation={modpackInstallation}
               onselect={(id) => (selectedId = id)}
               onchanged={refreshInstances}
             />
@@ -202,11 +296,9 @@
             />
           {:else if activePage === "settings"}<SettingsPage bind:settings {overview} />
           {:else if activePage === "modpacks"}<ModpacksPage
-              minecraftVersion={instance?.minecraftVersion ??
-                versions.at(-1)?.minecraftVersion ??
-                "26.2"}
               {versions}
-              oninstalled={finishModpackInstall}
+              installation={modpackInstallation}
+              oninstall={installSelectedModpack}
             />
           {:else if !instance}<div class="mc-panel p-10 text-center">
               <h2 class="block-title text-lg uppercase">No instance selected</h2>
@@ -222,6 +314,10 @@
               {instance}
               {versions}
               signedIn={account !== null}
+              {launching}
+              progress={launchProgress}
+              status={launcherStatus}
+              onplay={play}
               onopenmods={() => (activePage = "mods")}
               onversionchange={changeVersion}
             />

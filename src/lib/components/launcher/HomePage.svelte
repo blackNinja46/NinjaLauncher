@@ -1,56 +1,29 @@
 <script lang="ts">
   import Icon from "$lib/components/ui/Icon.svelte";
+  import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
   import type { LauncherInstance, SupportedVersion } from "$lib/types";
-  import { launchGame, messageFromError } from "$lib/api/tauri";
-  import { listen } from "@tauri-apps/api/event";
-  import { onMount } from "svelte";
   let {
     instance,
     versions,
     signedIn,
+    launching,
+    progress,
+    status,
+    onplay,
     onopenmods,
     onversionchange,
   }: {
     instance: LauncherInstance;
     versions: SupportedVersion[];
     signedIn: boolean;
+    launching: boolean;
+    progress: number | null;
+    status: string;
+    onplay: () => Promise<void>;
     onopenmods: () => void;
     onversionchange: (version: string) => Promise<void>;
   } = $props();
-  let launching = $state(false);
-  let status = $state("Everything is ready");
-
-  onMount(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    const unlisteners = [
-      listen<{ message: string }>("launcher://status", (event) => (status = event.payload.message)),
-      listen("launcher://game-started", () => {
-        launching = false;
-        status = "Minecraft is running";
-      }),
-      listen<number | null>("launcher://game-exited", (event) => {
-        launching = false;
-        status =
-          event.payload === 0
-            ? "Minecraft closed normally"
-            : `Minecraft exited with code ${event.payload ?? "unknown"}`;
-      }),
-    ];
-    return () => {
-      Promise.all(unlisteners).then((items) => items.forEach((unlisten) => unlisten()));
-    };
-  });
-  async function play() {
-    launching = true;
-    status = signedIn ? "Preparing instance…" : "Preparing demo instance…";
-    try {
-      await launchGame(instance.id, !signedIn);
-    } catch (error) {
-      launching = false;
-      status = messageFromError(error);
-    }
-  }
 </script>
 
 <PageHeader title="Ready to build?" description="Choose your world, gear up, and jump in." />
@@ -71,28 +44,27 @@
       </div>
       <h2 class="block-title text-[28px] uppercase text-white">{instance.name}</h2>
       <div class="mt-4 flex items-center gap-2.5">
-        <label
-          class="text-[10px] font-semibold uppercase tracking-wider text-[#71849b]"
-          for="home-version">Version</label
+        <span class="text-[10px] font-semibold uppercase tracking-wider text-[#71849b]"
+          >Version</span
         >
-        <select
-          id="home-version"
+        <CustomSelect
           value={instance.minecraftVersion}
-          onchange={(event) => onversionchange(event.currentTarget.value)}
+          options={versions.map((version) => ({
+            value: version.minecraftVersion,
+            label: `${version.minecraftVersion}${version.versionType === "snapshot" ? " · Snapshot" : ""}`,
+          }))}
+          onchange={(value) => onversionchange(String(value))}
           disabled={launching || Boolean(instance.modpack)}
-          class="mc-field px-3 py-2 text-xs font-bold text-blue-50 outline-none disabled:opacity-50"
-        >
-          {#each versions as version}<option value={version.minecraftVersion}
-              >{version.minecraftVersion}</option
-            >{/each}
-        </select>
+          ariaLabel="Minecraft version"
+          class="min-w-34 text-xs font-bold text-blue-50"
+        />
         <span class="mc-field px-3 py-2 text-xs text-[#9bc9ed]"
           >Fabric {instance.loaderVersion}</span
         >
       </div>
       <div class="mt-7 flex items-center gap-3">
         <button
-          onclick={play}
+          onclick={onplay}
           disabled={launching}
           class="mc-primary flex min-w-[190px] items-center justify-center gap-2 px-8 py-3.5 text-sm font-extrabold disabled:opacity-70"
           ><Icon name="play" size={17} />{launching
@@ -106,6 +78,34 @@
           class="mc-secondary px-5 py-3.5 text-sm font-bold text-[#ccecff]">Manage mods</button
         >
       </div>
+      {#if progress !== null}<div class="mt-5 max-w-lg" aria-live="polite">
+          <div
+            class="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-[.11em]"
+          >
+            <span class={launching ? "text-cyan-200" : "text-emerald-300"}>{status}</span>
+            <span class="font-mono text-[#89b7d4]">{progress}%</span>
+          </div>
+          <div
+            class="h-2 overflow-hidden border border-cyan-300/20 bg-[#020a1a] p-px"
+            role="progressbar"
+            aria-label="Minecraft launch progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={progress}
+          >
+            <div
+              class="relative h-full overflow-hidden transition-[width,background-color] duration-500 ease-out {progress ===
+              100
+                ? 'bg-emerald-400'
+                : 'bg-cyan-400'}"
+              style={`width: ${progress}%`}
+            >
+              {#if launching}<span
+                  class="absolute inset-y-0 right-0 w-12 animate-pulse bg-gradient-to-r from-transparent to-white/45"
+                ></span>{/if}
+            </div>
+          </div>
+        </div>{/if}
       {#if instance.modpack}<p class="mt-3 text-[11px] text-violet-200/70">
           Modrinth pack · {instance.modpack.name} · {instance.modpack.fileCount} managed files
         </p>{/if}

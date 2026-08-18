@@ -8,9 +8,11 @@ export interface LauncherSettings {
   closeOnLaunch: boolean;
   reopenOnExit: boolean;
   showLogsOnLaunch: boolean;
+  showSnapshots: boolean;
   language: string;
   theme: Theme;
   checkForUpdates: boolean;
+  discordRichPresence: boolean;
 }
 
 export interface LauncherOverview {
@@ -44,9 +46,18 @@ export interface InstalledModpack {
   fileCount: number;
 }
 
+export interface ModpackInstallation {
+  projectId: string;
+  name: string;
+  iconUrl: string | null;
+  phase: "installing" | "failed";
+  error?: string;
+}
+
 export interface SupportedVersion {
   minecraftVersion: string;
   fabricLoaderVersion: string;
+  versionType: "release" | "snapshot";
 }
 
 export interface ModrinthHit {
@@ -70,6 +81,7 @@ export interface ModrinthVersion {
   id: string;
   name: string;
   versionType: "release" | "beta" | "alpha";
+  gameVersions: string[];
 }
 export interface ModConflictReport {
   compatible: boolean;

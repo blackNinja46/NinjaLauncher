@@ -1,5 +1,6 @@
 mod auth;
 mod commands;
+mod discord;
 mod downloads;
 mod error;
 mod instances;
@@ -22,8 +23,14 @@ pub fn run() {
             let paths = PathManager::from_app(app.handle())?;
             paths.ensure_directories()?;
             instances::manager::ensure_default(&paths)?;
+            let settings = storage::config::load(&paths)?;
+            let discord_presence = discord::DiscordPresence::new(settings.discord_rich_presence);
+            if settings.discord_rich_presence {
+                discord_presence.show_launcher();
+            }
             app.manage(paths);
             app.manage(modrinth::client::ModrinthClient::new()?);
+            app.manage(discord_presence);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

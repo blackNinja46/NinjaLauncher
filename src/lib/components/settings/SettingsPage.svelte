@@ -2,6 +2,7 @@
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
   import SettingRow from "./SettingRow.svelte";
   import Toggle from "./Toggle.svelte";
+  import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import type { LauncherOverview, LauncherSettings } from "$lib/types";
   import {
     saveSettings,
@@ -48,14 +49,19 @@
     </h2>
     <div class="mc-panel overflow-hidden">
       <SettingRow title="Allocated memory" description="Maximum RAM available to Minecraft.">
-        <select
-          bind:value={settings.allocatedMemoryMb}
-          class="mc-field px-3 py-2 text-xs text-[#d8e4f3]"
-        >
-          <option value={2048}>2 GB</option>
-          <option value={4096}>4 GB</option><option value={6144}>6 GB</option>
-          <option value={8192}>8 GB</option><option value={12288}>12 GB</option>
-        </select>
+        <CustomSelect
+          value={settings.allocatedMemoryMb}
+          options={[
+            { value: 2048, label: "2 GB" },
+            { value: 4096, label: "4 GB" },
+            { value: 6144, label: "6 GB" },
+            { value: 8192, label: "8 GB" },
+            { value: 12288, label: "12 GB" },
+          ]}
+          onchange={(value) => (settings.allocatedMemoryMb = Number(value))}
+          ariaLabel="Allocated memory"
+          class="min-w-28 text-xs text-[#d8e4f3]"
+        />
       </SettingRow>
       <SettingRow
         title="Java runtime"
@@ -85,6 +91,12 @@
       >
         <Toggle bind:checked={settings.showLogsOnLaunch} label="Open game logs on launch" />
       </SettingRow>
+      <SettingRow
+        title="Show snapshots"
+        description="Include the latest Minecraft preview versions in version menus."
+      >
+        <Toggle bind:checked={settings.showSnapshots} label="Show Minecraft snapshots" />
+      </SettingRow>
     </div>
   </section>
   <section>
@@ -96,14 +108,18 @@
         title="Parallel downloads"
         description="Number of files Ninja Launcher may download at once."
       >
-        <select
-          bind:value={settings.downloadConcurrency}
-          class="mc-field px-3 py-2 text-xs text-[#d8e4f3]"
-        >
-          <option value={2}>2 files</option>
-          <option value={4}>4 files</option><option value={6}>6 files</option>
-          <option value={8}>8 files</option>
-        </select>
+        <CustomSelect
+          value={settings.downloadConcurrency}
+          options={[
+            { value: 2, label: "2 files" },
+            { value: 4, label: "4 files" },
+            { value: 6, label: "6 files" },
+            { value: 8, label: "8 files" },
+          ]}
+          onchange={(value) => (settings.downloadConcurrency = Number(value))}
+          ariaLabel="Parallel downloads"
+          class="min-w-28 text-xs text-[#d8e4f3]"
+        />
       </SettingRow>
       <SettingRow title="Launcher directory" description={overview.appDataDirectory}>
         <button
@@ -134,6 +150,12 @@
         description="Look for a new Ninja Launcher release when the app starts."
       >
         <Toggle bind:checked={settings.checkForUpdates} label="Check for updates" />
+      </SettingRow>
+      <SettingRow
+        title="Discord Rich Presence"
+        description="Show when you are using Ninja Launcher or playing Minecraft on your Discord profile."
+      >
+        <Toggle bind:checked={settings.discordRichPresence} label="Discord Rich Presence" />
       </SettingRow>
       <SettingRow
         title="Launcher logs"

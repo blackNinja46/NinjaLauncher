@@ -2,7 +2,7 @@ use crate::{
     downloads::manager::{self as download_manager, DownloadSpec},
     error::CommandError,
     instances::{
-        instance::{InstalledModpack, InstanceConfig, SUPPORTED_MINECRAFT_VERSIONS},
+        instance::{is_valid_version_id, InstalledModpack, InstanceConfig},
         manager as instance_manager,
     },
     modrinth::client::{ModrinthClient, ProjectVersion, ProjectVersionSummary, SearchResponse},
@@ -54,27 +54,34 @@ struct ModpackEnvironment {
 #[tauri::command]
 pub async fn search_modpacks(
     query: String,
-    minecraft_version: String,
     loader: String,
+    offset: u32,
     client: State<'_, ModrinthClient>,
 ) -> Result<SearchResponse, CommandError> {
-    validate_supported_environment(&minecraft_version, &loader)?;
+    if loader != "fabric" {
+        return Err(CommandError::new(
+            "Only Fabric modpacks are currently supported.",
+        ));
+    }
     client
-        .search_modpacks(query.trim(), &minecraft_version, &loader)
+        .search_modpacks(query.trim(), &loader, offset.min(10_000))
         .await
 }
 
 #[tauri::command]
 pub async fn list_modpack_versions(
     project_id: String,
-    minecraft_version: String,
     loader: String,
     client: State<'_, ModrinthClient>,
 ) -> Result<Vec<ProjectVersionSummary>, CommandError> {
     validate_modrinth_id(&project_id)?;
-    validate_supported_environment(&minecraft_version, &loader)?;
+    if loader != "fabric" {
+        return Err(CommandError::new(
+            "Only Fabric modpacks are currently supported.",
+        ));
+    }
     Ok(client
-        .versions(&project_id, &minecraft_version, &loader)
+        .versions_for_loader(&project_id, &loader)
         .await?
         .iter()
         .map(ProjectVersionSummary::from)
@@ -87,19 +94,11 @@ pub async fn install_modpack(
     version_id: Option<String>,
     name: String,
     icon_url: Option<String>,
-    minecraft_version: String,
     paths: State<'_, PathManager>,
     client: State<'_, ModrinthClient>,
 ) -> Result<InstanceConfig, CommandError> {
     validate_modrinth_id(&project_id)?;
-    validate_supported_environment(&minecraft_version, "fabric")?;
-    let version = select_version(
-        &client,
-        &project_id,
-        version_id.as_deref(),
-        &minecraft_version,
-    )
-    .await?;
+    let version = select_version(&client, &project_id, version_id.as_deref()).await?;
     let pack_file = version
         .files
         .iter()
@@ -129,7 +128,12 @@ pub async fn install_modpack(
     .await?;
 
     let index = read_index(&archive_path)?;
-    validate_index(&index, &minecraft_version)?;
+    validate_index(&index)?;
+    let minecraft_version = index
+        .dependencies
+        .get("minecraft")
+        .cloned()
+        .expect("validated Minecraft dependency");
     let instance_id = uuid::Uuid::new_v4().simple().to_string();
     let directory = instance_manager::instance_dir(&paths, &instance_id)?;
     std::fs::create_dir_all(&directory)?;
@@ -191,19 +195,14 @@ async fn select_version(
     client: &ModrinthClient,
     project_id: &str,
     version_id: Option<&str>,
-    minecraft_version: &str,
 ) -> Result<ProjectVersion, CommandError> {
     let version = if let Some(version_id) = version_id {
         validate_modrinth_id(version_id)?;
         client.version(version_id).await?
     } else {
-        let mut versions = client
-            .versions(project_id, minecraft_version, "fabric")
-            .await?;
+        let mut versions = client.versions_for_loader(project_id, "fabric").await?;
         if versions.is_empty() {
-            return Err(CommandError::new(format!(
-                "No Fabric modpack version is available for Minecraft {minecraft_version}."
-            )));
+            return Err(CommandError::new("No Fabric modpack version is available."));
         }
         let preferred = versions
             .iter()
@@ -212,16 +211,11 @@ async fn select_version(
         versions.remove(preferred)
     };
     if version.project_id != project_id
-        || (!version.game_versions.is_empty()
-            && !version
-                .game_versions
-                .iter()
-                .any(|game| game == minecraft_version))
         || (!version.loaders.is_empty() && !version.loaders.iter().any(|loader| loader == "fabric"))
     {
-        return Err(CommandError::new(format!(
-            "The selected modpack version is not compatible with Minecraft {minecraft_version} and Fabric."
-        )));
+        return Err(CommandError::new(
+            "The selected modpack version is not compatible with Fabric.",
+        ));
     }
     Ok(version)
 }
@@ -248,17 +242,21 @@ fn read_index(archive_path: &Path) -> Result<ModpackIndex, CommandError> {
     Ok(serde_json::from_slice(&contents)?)
 }
 
-fn validate_index(index: &ModpackIndex, minecraft_version: &str) -> Result<(), CommandError> {
+fn validate_index(index: &ModpackIndex) -> Result<(), CommandError> {
     if index.format_version != 1 || index.game != "minecraft" || index.version_id.trim().is_empty()
     {
         return Err(CommandError::new(
             "This file does not use the supported Modrinth modpack format.",
         ));
     }
-    if index.dependencies.get("minecraft").map(String::as_str) != Some(minecraft_version) {
-        return Err(CommandError::new(format!(
-            "The modpack index targets another Minecraft version instead of {minecraft_version}."
-        )));
+    if !index
+        .dependencies
+        .get("minecraft")
+        .is_some_and(|version| is_valid_version_id(version))
+    {
+        return Err(CommandError::new(
+            "The modpack contains an invalid Minecraft version.",
+        ));
     }
     let loader = index
         .dependencies
@@ -428,18 +426,6 @@ fn allowed_download_url(value: &str) -> bool {
         )
 }
 
-fn validate_supported_environment(
-    minecraft_version: &str,
-    loader: &str,
-) -> Result<(), CommandError> {
-    if !SUPPORTED_MINECRAFT_VERSIONS.contains(&minecraft_version) || loader != "fabric" {
-        return Err(CommandError::new(
-            "Only supported Minecraft versions with Fabric can be used for modpacks.",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_modrinth_id(value: &str) -> Result<(), CommandError> {
     if value.is_empty()
         || !value
@@ -522,7 +508,7 @@ mod tests {
         archive.finish().expect("finish archive");
 
         let index = read_index(&archive_path).expect("read index");
-        validate_index(&index, "26.2").expect("valid index");
+        validate_index(&index).expect("valid index");
         let instance = root.join("instance");
         std::fs::create_dir_all(&instance).expect("instance directory");
         extract_overrides(&archive_path, &instance).expect("extract overrides");

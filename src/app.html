@@ -6,9 +6,128 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#020817" />
     <title>Ninja Launcher</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #020817;
+      }
+
+      #app-start-screen {
+        position: fixed;
+        z-index: 9999;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        color: #effaff;
+        background:
+          radial-gradient(circle at 50% 35%, rgba(8, 159, 240, 0.2), transparent 34%),
+          linear-gradient(135deg, #020817 0%, #06142d 54%, #031024 100%);
+        font-family: "Inter", "Avenir Next", "SF Pro Display", "Segoe UI", sans-serif;
+        opacity: 1;
+        transition: opacity 240ms ease;
+      }
+
+      #app-start-screen::before {
+        position: absolute;
+        inset: 0;
+        content: "";
+        background-image:
+          linear-gradient(rgba(19, 174, 238, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(19, 174, 238, 0.035) 1px, transparent 1px);
+        background-size: 32px 32px;
+      }
+
+      #app-start-screen.is-hidden {
+        pointer-events: none;
+        opacity: 0;
+      }
+
+      .app-start-content {
+        position: relative;
+        display: flex;
+        width: min(360px, calc(100vw - 48px));
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .app-start-logo {
+        width: 112px;
+        height: 88px;
+        object-fit: contain;
+        filter: drop-shadow(0 10px 25px rgba(0, 159, 240, 0.28));
+        animation: app-start-pulse 1.6s ease-in-out infinite;
+      }
+
+      .app-start-title {
+        margin: 18px 0 0;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .app-start-label {
+        margin: 8px 0 22px;
+        color: #6f9cbd;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .app-start-track {
+        width: 100%;
+        height: 6px;
+        overflow: hidden;
+        border: 1px solid rgba(25, 216, 241, 0.2);
+        background: #020a1a;
+      }
+
+      .app-start-progress {
+        width: 42%;
+        height: 100%;
+        background: linear-gradient(90deg, #0874d4, #19d8f1);
+        box-shadow: 0 0 14px rgba(25, 216, 241, 0.45);
+        animation: app-start-loading 1.25s ease-in-out infinite;
+      }
+
+      @keyframes app-start-loading {
+        from {
+          transform: translateX(-115%);
+        }
+        to {
+          transform: translateX(340%);
+        }
+      }
+
+      @keyframes app-start-pulse {
+        50% {
+          transform: scale(1.035);
+          filter: drop-shadow(0 10px 32px rgba(25, 216, 241, 0.42));
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-start-logo,
+        .app-start-progress {
+          animation-duration: 3s;
+        }
+      }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <div id="app-start-screen" role="status" aria-label="Ninja Launcher is starting">
+      <div class="app-start-content">
+        <img class="app-start-logo" src="%sveltekit.assets%/brand/ninja-launcher-mark.png" alt="" />
+        <p class="app-start-title">Ninja Launcher</p>
+        <p class="app-start-label">Preparing launcher</p>
+        <div class="app-start-track"><div class="app-start-progress"></div></div>
+      </div>
+    </div>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>

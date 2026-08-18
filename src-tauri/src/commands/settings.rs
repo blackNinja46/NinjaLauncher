@@ -1,4 +1,5 @@
 use crate::{
+    discord::DiscordPresence,
     error::CommandError,
     storage::{config, config::LauncherSettings, paths::PathManager},
 };
@@ -13,7 +14,9 @@ pub fn get_settings(paths: State<'_, PathManager>) -> Result<LauncherSettings, C
 pub fn save_settings(
     settings: LauncherSettings,
     paths: State<'_, PathManager>,
+    discord: State<'_, DiscordPresence>,
 ) -> Result<LauncherSettings, CommandError> {
     config::save(&paths, &settings)?;
+    discord.set_enabled(settings.discord_rich_presence);
     Ok(settings)
 }

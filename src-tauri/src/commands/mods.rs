@@ -21,10 +21,16 @@ pub async fn search_mods(
     query: String,
     minecraft_version: String,
     loader: String,
+    offset: u32,
     client: State<'_, ModrinthClient>,
 ) -> Result<SearchResponse, CommandError> {
     client
-        .search(query.trim(), &minecraft_version, &loader)
+        .search(
+            query.trim(),
+            &minecraft_version,
+            &loader,
+            offset.min(10_000),
+        )
         .await
 }
 

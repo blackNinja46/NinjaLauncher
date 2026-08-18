@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "$lib/components/ui/Icon.svelte";
+  import MinecraftAvatar from "$lib/components/account/MinecraftAvatar.svelte";
   import type { NavigationItem } from "$lib/types";
   import type { Account } from "$lib/types";
   let {
@@ -65,8 +66,10 @@
   </nav>
   <div class="relative mt-auto border-t border-cyan-300/[0.1] pt-4">
     <button onclick={onaccount} class="mc-secondary flex w-full items-center gap-3 p-2 text-left">
-      <div class="grid size-8 place-items-center bg-[#0a3b68] text-[11px] font-bold text-cyan-100">
-        {account ? account.username[0]?.toUpperCase() : "?"}
+      <div class="size-8 shrink-0 text-[11px]">
+        {#key account?.uuid}
+          <MinecraftAvatar {account} />
+        {/key}
       </div>
       <div class="min-w-0 flex-1">
         <div class="truncate text-xs font-medium text-[#d7d9de]">

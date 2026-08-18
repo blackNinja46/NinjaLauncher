@@ -126,7 +126,7 @@
   </div>
   <div
     bind:this={consoleElement}
-    class="h-[500px] overflow-auto bg-[#010714] p-4 font-mono text-[11px] leading-[1.65] selection:bg-cyan-400/25"
+    class="h-[450px] overflow-auto bg-[#010714] p-4 font-mono text-[11px] leading-[1.65] selection:bg-cyan-400/25"
   >
     {#if visibleLogs.length}
       {#each visibleLogs as item}

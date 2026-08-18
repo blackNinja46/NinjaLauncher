@@ -9,6 +9,7 @@
     switchMicrosoftAccount,
   } from "$lib/api/tauri";
   import type { Account } from "$lib/types";
+  import MinecraftAvatar from "$lib/components/account/MinecraftAvatar.svelte";
   let {
     account = $bindable(),
     accounts = $bindable(),
@@ -99,10 +100,8 @@
               ? 'border-cyan-300/35 bg-cyan-300/[.08]'
               : 'border-cyan-300/10 bg-cyan-300/[.025]'}"
           >
-            <div
-              class="grid size-10 shrink-0 place-items-center bg-accent-500 font-bold text-white"
-            >
-              {savedAccount.username[0] ?? "?"}
+            <div class="size-10 shrink-0">
+              <MinecraftAvatar account={savedAccount} />
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
