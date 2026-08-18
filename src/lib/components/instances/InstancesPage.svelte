@@ -137,7 +137,7 @@
         ></div>{/if}
       <div class="flex items-center gap-2">
         <div
-          class="grid size-14 place-items-center overflow-hidden rounded-lg transition {selectedId ===
+          class="grid size-14 place-items-center overflow-hidden rounded-lg border border-cyan-300/15 bg-[#07335d] transition {selectedId ===
           instance.id
             ? 'ring-1 ring-cyan-300/55 shadow-[0_0_18px_rgba(25,216,241,.25)]'
             : ''}"

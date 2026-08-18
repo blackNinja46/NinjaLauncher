@@ -160,7 +160,7 @@
             <img
               src={pack.iconUrl}
               alt=""
-              class="size-16 shrink-0 object-cover ring-1 ring-cyan-300/20"
+              class="size-16 shrink-0 object-cover rounded-lg border border-cyan-300/15 bg-[#07335d]"
             />
           {:else}
             <div

@@ -464,7 +464,7 @@
               {#if project?.iconUrl}<img
                   src={project.iconUrl}
                   alt=""
-                  class="size-11 shrink-0 object-cover ring-1 ring-cyan-300/20"
+                  class="size-11 shrink-0 object-cover rounded-lg border border-cyan-300/15 bg-[#07335d]"
                 />{:else}<div
                   class="grid size-11 shrink-0 place-items-center border border-cyan-300/15 bg-[#07335d] text-sm font-black uppercase text-cyan-100"
                 >
@@ -522,11 +522,11 @@
                 disabled={busyProjectId === mod.projectId}
                 class="flex items-center gap-2.5 text-left disabled:cursor-wait disabled:opacity-50"
                 ><span
-                  class="relative h-5 w-9 border transition {mod.enabled
+                  class="relative h-6 w-10 border rounded-md transition {mod.enabled
                     ? 'border-emerald-300/40 bg-emerald-400/20'
                     : 'border-white/15 bg-white/[0.04]'}"
                   ><span
-                    class="absolute top-[3px] size-3 transition-all {mod.enabled
+                    class="absolute top-[3px] size-4 transition-all rounded-sm {mod.enabled
                       ? 'left-[18px] bg-emerald-300 shadow-[0_0_7px_#34d399]'
                       : 'left-[3px] bg-[#607286]'}"
                   ></span></span
@@ -606,7 +606,7 @@
           {#if mod.iconUrl}<img
               src={mod.iconUrl}
               alt=""
-              class="size-12 object-cover ring-1 ring-cyan-300/20"
+              class="size-12 object-cover rounded-lg border border-cyan-300/15 bg-[#07335d]"
             />{:else}<div
               class="grid size-12 shrink-0 place-items-center bg-[#0a3b68] text-lg font-bold text-cyan-100"
             >
