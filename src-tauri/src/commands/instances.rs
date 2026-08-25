@@ -20,6 +20,11 @@ pub async fn list_supported_versions() -> Vec<SupportedVersion> {
 }
 
 #[tauri::command]
+pub async fn list_fabric_loader_versions() -> Vec<instance::FabricLoaderVersionOption> {
+    instance::loader_versions().await
+}
+
+#[tauri::command]
 pub fn save_instance(
     instance: InstanceConfig,
     paths: State<'_, PathManager>,
@@ -71,7 +76,10 @@ pub fn duplicate_instance(
     manager::save(&paths, &copy)?;
     let source_directory = manager::instance_dir(&paths, &id)?;
     let copy_directory = manager::instance_dir(&paths, &copy.id)?;
-    copy_instance_contents(&source_directory, &copy_directory)?;
+    if let Err(error) = copy_instance_contents(&source_directory, &copy_directory) {
+        let _ = manager::delete(&paths, &copy.id);
+        return Err(error);
+    }
     Ok(copy)
 }
 
@@ -90,7 +98,7 @@ pub fn open_instance_folder(
     std::fs::create_dir_all(&directory)?;
     app.opener()
         .open_path(directory.to_string_lossy(), None::<String>)
-        .map_err(|error| CommandError::new(format!("Could not open the instance folder: {error}")))
+        .map_err(|error| CommandError::new(format!("Could not open the profile folder: {error}")))
 }
 
 fn copy_dir_contents(

@@ -17,6 +17,13 @@ pub struct SupportedVersion {
     pub version_type: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FabricLoaderVersionOption {
+    pub version: String,
+    pub stable: bool,
+}
+
 #[derive(Deserialize)]
 struct FabricGameVersion {
     version: String,
@@ -24,9 +31,51 @@ struct FabricGameVersion {
 }
 
 #[derive(Deserialize)]
-struct FabricLoaderVersion {
+struct FabricLoaderVersionResponse {
     version: String,
     stable: bool,
+}
+
+pub async fn loader_versions() -> Vec<FabricLoaderVersionOption> {
+    fetch_loader_versions().await.unwrap_or_else(|_| {
+        vec![FabricLoaderVersionOption {
+            version: DEFAULT_FABRIC_VERSION.into(),
+            stable: true,
+        }]
+    })
+}
+
+async fn fetch_loader_versions() -> Result<Vec<FabricLoaderVersionOption>, CommandError> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("NinjaLauncher/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let versions: Vec<FabricLoaderVersionResponse> = client
+        .get("https://meta.fabricmc.net/v2/versions/loader")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let mut result = Vec::new();
+    for loader in versions {
+        if is_valid_version_id(&loader.version)
+            && !result
+                .iter()
+                .any(|item: &FabricLoaderVersionOption| item.version == loader.version)
+        {
+            result.push(FabricLoaderVersionOption {
+                version: loader.version,
+                stable: loader.stable,
+            });
+        }
+        if result.len() >= 100 {
+            break;
+        }
+    }
+    if result.is_empty() {
+        return Err(CommandError::new("Fabric returned no loader versions."));
+    }
+    Ok(result)
 }
 
 pub async fn supported_versions() -> Vec<SupportedVersion> {
@@ -46,7 +95,7 @@ async fn fetch_supported_versions() -> Result<Vec<SupportedVersion>, CommandErro
         .error_for_status()?
         .json()
         .await?;
-    let loaders: Vec<FabricLoaderVersion> = client
+    let loaders: Vec<FabricLoaderVersionResponse> = client
         .get("https://meta.fabricmc.net/v2/versions/loader")
         .send()
         .await?
@@ -162,6 +211,29 @@ mod tests {
         assert_eq!(versions[0].version_type, "snapshot");
         assert_eq!(versions[1].version_type, "release");
     }
+
+    #[test]
+    fn older_modpack_instances_default_to_no_visible_pack_mods() {
+        let instance: InstanceConfig = serde_json::from_str(
+            r#"{
+                "id": "legacy-pack",
+                "name": "Legacy Pack",
+                "minecraftVersion": "1.21.1",
+                "loader": "fabric",
+                "loaderVersion": "0.16.10",
+                "mods": [],
+                "modpack": {
+                    "projectId": "example",
+                    "versionId": "version",
+                    "name": "Example",
+                    "iconUrl": null,
+                    "fileCount": 5
+                }
+            }"#,
+        )
+        .expect("legacy instance");
+        assert!(instance.modpack.expect("modpack").pack_mods.is_empty());
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -187,6 +259,18 @@ pub struct InstalledModpack {
     pub icon_url: Option<String>,
     #[serde(default)]
     pub file_count: usize,
+    #[serde(default)]
+    pub pack_mods: Vec<PackMod>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackMod {
+    pub project_id: Option<String>,
+    pub version_id: Option<String>,
+    pub name: String,
+    pub version_name: String,
+    pub icon_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -50,7 +50,7 @@ impl DiscordPresence {
     pub fn show_playing(&self, instance_name: &str, minecraft_version: &str) {
         self.publish(
             format!("Playing Minecraft {minecraft_version}"),
-            format!("Instance: {instance_name}"),
+            format!("Profile: {instance_name}"),
         );
     }
 

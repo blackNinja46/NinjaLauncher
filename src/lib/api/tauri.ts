@@ -1,14 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import type {
   Account,
   AccountState,
   DeviceCode,
+  FabricLoaderVersionOption,
   LauncherInstance,
   LauncherOverview,
   LauncherSettings,
   ModConflictReport,
+  ModRepairReport,
+  ModpackExportReport,
+  ModpackFileInspection,
   ModrinthProject,
   ModrinthSearchResponse,
   ModrinthVersion,
@@ -109,6 +114,10 @@ export const listSupportedVersions = (): Promise<SupportedVersion[]> =>
           ].map((minecraftVersion) => ({ minecraftVersion, versionType: "release" as const })),
         ].map((version) => ({ ...version, fabricLoaderVersion: "0.19.3" })),
       );
+export const listFabricLoaderVersions = (): Promise<FabricLoaderVersionOption[]> =>
+  inTauri()
+    ? invoke("list_fabric_loader_versions")
+    : Promise.resolve([{ version: "0.19.3", stable: true }]);
 export const saveInstance = (instance: LauncherInstance) =>
   invoke<LauncherInstance>("save_instance", { instance });
 export const createInstance = (name: string, minecraftVersion: string, loaderVersion: string) =>
@@ -127,10 +136,16 @@ export const listModVersions = (projectId: string, minecraftVersion: string, loa
   inTauri()
     ? invoke<ModrinthVersion[]>("list_mod_versions", { projectId, minecraftVersion, loader })
     : Promise.resolve([]);
+export const getInstalledModVersions = (instanceId: string) =>
+  inTauri()
+    ? invoke<Record<string, string>>("get_installed_mod_versions", { instanceId })
+    : Promise.resolve({});
 export const analyzeModConflicts = (instanceId: string) =>
   inTauri()
     ? invoke<ModConflictReport>("analyze_mod_conflicts", { instanceId })
     : Promise.resolve({ compatible: true, message: null, projectIds: [] });
+export const repairModConfiguration = (instanceId: string) =>
+  invoke<ModRepairReport>("repair_mod_configuration", { instanceId });
 export const addMod = (
   instanceId: string,
   projectId: string,
@@ -170,6 +185,48 @@ export const installModpack = (
     name,
     iconUrl,
   });
+export async function chooseModpackFile(): Promise<ModpackFileInspection | null> {
+  if (!inTauri()) return null;
+  const path = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Modrinth Modpack", extensions: ["mrpack"] }],
+  });
+  return path ? invoke<ModpackFileInspection>("inspect_modpack_file", { path }) : null;
+}
+export const importModpackFile = (path: string, allowForeignMods: boolean) =>
+  invoke<LauncherInstance>("import_modpack_file", { path, allowForeignMods });
+export const refreshImportedModpackMods = (instanceId: string) =>
+  invoke<LauncherInstance>("refresh_imported_modpack_mods", { instanceId });
+export const listExportableFolders = (instanceId: string) =>
+  invoke<string[]>("list_exportable_folders", { instanceId });
+export async function exportModpackFile(
+  instanceId: string,
+  packName: string,
+  versionId: string,
+  includedFolders: string[],
+): Promise<ModpackExportReport | null> {
+  if (!inTauri()) return null;
+  const safeName = packName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const destination = await save({
+    defaultPath: `${safeName || "modpack"}.mrpack`,
+    filters: [{ name: "Modrinth Modpack", extensions: ["mrpack"] }],
+  });
+  const path = destination?.toLowerCase().endsWith(".mrpack")
+    ? destination
+    : destination
+      ? `${destination}.mrpack`
+      : null;
+  return path
+    ? invoke<ModpackExportReport>("export_modpack", {
+        instanceId,
+        destination: path,
+        packName,
+        versionId,
+        includedFolders,
+      })
+    : null;
+}
 export const getAccount = () =>
   inTauri() ? invoke<Account | null>("get_account") : Promise.resolve(null);
 export const getAccounts = () =>
@@ -184,8 +241,13 @@ export const switchMicrosoftAccount = (uuid: string) =>
 export const removeMicrosoftAccount = (uuid: string) =>
   invoke<AccountState>("remove_microsoft_account", { uuid });
 export const logout = () => invoke<void>("logout");
-export const launchGame = (instanceId: string, demo = false) =>
-  invoke<void>("launch_game", { instanceId, demo });
+export const launchGame = (instanceId: string, demo = false, serverAddress?: string) =>
+  invoke<void>("launch_game", { instanceId, demo, serverAddress: serverAddress ?? null });
+export const getServerIcon = (serverAddress: string) =>
+  inTauri() ? invoke<string | null>("get_server_icon", { serverAddress }) : Promise.resolve(null);
+export const listRunningInstances = () =>
+  inTauri() ? invoke<string[]>("list_running_instances") : Promise.resolve([]);
+export const stopGame = (instanceId: string) => invoke<void>("stop_game", { instanceId });
 export const openLauncherFolder = () => invoke<void>("open_launcher_folder");
 export const openLogsFolder = () => invoke<void>("open_logs_folder");
 

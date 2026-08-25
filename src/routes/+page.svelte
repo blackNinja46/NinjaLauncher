@@ -19,9 +19,12 @@
     installModpack,
     launchGame,
     listInstances,
+    listRunningInstances,
     listSupportedVersions,
     messageFromError,
+    repairModConfiguration,
     saveInstance,
+    stopGame,
     type AppUpdateProgress,
   } from "$lib/api/tauri";
   import type {
@@ -67,15 +70,25 @@
     allVersions.filter((version) => settings.showSnapshots || version.versionType === "release"),
   );
   let gameLogs = $state<GameLogEntry[]>([]);
-  let gameRunning = $state(false);
-  let launching = $state(false);
+  let runningInstanceIds = $state<string[]>([]);
+  let launchingInstanceIds = $state<string[]>([]);
+  let stoppingInstanceIds = $state<string[]>([]);
   let launcherStatus = $state("Everything is ready");
   let launchProgress = $state<number | null>(null);
   let modpackInstallation = $state<ModpackInstallation | null>(null);
   let appUpdate = $state<AppUpdateProgress | null>(null);
   let updateError = $state("");
+  let fabricIssue = $state("");
+  let fabricIssueCandidate = $state("");
+  let fabricDialogOpen = $state(false);
+  let lastGameExitFailed = $state(false);
+  let fabricRepairing = $state(false);
+  let fabricRepairNotice = $state("");
   let showWindowsTitlebar = $state(false);
   let instance = $derived(instances.find((item) => item.id === selectedId) ?? instances[0]);
+  let gameRunning = $derived(Boolean(instance && runningInstanceIds.includes(instance.id)));
+  let launching = $derived(Boolean(instance && launchingInstanceIds.includes(instance.id)));
+  let stopping = $derived(Boolean(instance && stoppingInstanceIds.includes(instance.id)));
   let updatePercent = $derived(
     appUpdate?.totalBytes && appUpdate.downloadedBytes
       ? Math.min(100, Math.round((appUpdate.downloadedBytes / appUpdate.totalBytes) * 100))
@@ -95,6 +108,43 @@
   async function refreshInstances() {
     instances = await listInstances();
     if (!instances.some((item) => item.id === selectedId)) selectedId = instances[0]?.id ?? "";
+  }
+
+  function isFabricIssue(message: string): boolean {
+    return /incompatible mods? found|incompatible mod set|mod resolution|dependency requirements|not compatible with minecraft|fabric.*(?:error|failed|exception)|formattedexception|potential solution has been determined/i.test(
+      message,
+    );
+  }
+
+  function collectFabricIssue(line: string) {
+    if (!fabricIssueCandidate && !isFabricIssue(line)) return;
+    if (fabricIssueCandidate.length >= 16_000) return;
+    fabricIssueCandidate = fabricIssueCandidate ? `${fabricIssueCandidate}\n${line}` : line;
+    if (lastGameExitFailed && !gameRunning) {
+      fabricIssue = fabricIssueCandidate;
+      fabricDialogOpen = true;
+    }
+  }
+
+  async function repairFabric() {
+    if (!instance || fabricRepairing) return;
+    fabricRepairing = true;
+    fabricRepairNotice = "";
+    try {
+      const report = await repairModConfiguration(instance.id);
+      await refreshInstances();
+      const disabled = report.disabledMods.length
+        ? ` Disabled: ${report.disabledMods.join(", ")}.`
+        : "";
+      fabricRepairNotice = `Fabric configuration repaired. ${report.resetVersions} pinned mod version(s) reset.${disabled} Start the profile again to apply the repair.`;
+      fabricIssue = "";
+      fabricIssueCandidate = "";
+      fabricDialogOpen = false;
+    } catch (cause) {
+      fabricIssue = messageFromError(cause);
+    } finally {
+      fabricRepairing = false;
+    }
   }
   async function changeVersion(minecraftVersion: string) {
     if (!instance) return;
@@ -143,22 +193,54 @@
     }
   }
 
-  async function play() {
-    if (!instance || launching) return;
-    launching = true;
+  async function play(serverAddress?: string) {
+    if (!instance || launching || gameRunning) return;
+    const launchingId = instance.id;
+    fabricIssue = "";
+    fabricIssueCandidate = "";
+    fabricDialogOpen = false;
+    lastGameExitFailed = false;
+    fabricRepairNotice = "";
+    launchingInstanceIds = [...launchingInstanceIds, launchingId];
     launchProgress = 3;
-    launcherStatus = account ? "Preparing instance…" : "Preparing demo instance…";
+    launcherStatus = serverAddress
+      ? `Preparing connection to ${serverAddress}…`
+      : account
+        ? "Preparing profile…"
+        : "Preparing demo profile…";
     try {
-      await launchGame(instance.id, account === null);
-      if (launching) {
-        launching = false;
+      await launchGame(launchingId, account === null, serverAddress);
+      if (launchingInstanceIds.includes(launchingId)) {
+        launchingInstanceIds = launchingInstanceIds.filter((id) => id !== launchingId);
         launchProgress = 100;
         launcherStatus = "Minecraft is running";
       }
     } catch (error) {
-      launching = false;
+      launchingInstanceIds = launchingInstanceIds.filter((id) => id !== launchingId);
       launchProgress = null;
       launcherStatus = messageFromError(error);
+      if (isFabricIssue(launcherStatus)) {
+        fabricIssue = launcherStatus;
+        fabricIssueCandidate = launcherStatus;
+        fabricDialogOpen = true;
+      }
+    }
+  }
+
+  async function stopSelectedGame() {
+    if (!instance || stopping) return;
+    const stoppingId = instance.id;
+    stoppingInstanceIds = [...stoppingInstanceIds, stoppingId];
+    launcherStatus = `Stopping ${instance.name}…`;
+    try {
+      await stopGame(stoppingId);
+      runningInstanceIds = runningInstanceIds.filter((id) => id !== stoppingId);
+      launcherStatus = `${instance.name} stopped`;
+    } catch (cause) {
+      launcherStatus = messageFromError(cause);
+      runningInstanceIds = await listRunningInstances();
+    } finally {
+      stoppingInstanceIds = stoppingInstanceIds.filter((id) => id !== stoppingId);
     }
   }
 
@@ -176,6 +258,7 @@
       Promise.all([
         listen<GameLogEntry>("launcher://log", (event) => {
           gameLogs = [...gameLogs.slice(-1999), event.payload];
+          collectFabricIssue(event.payload.line);
         }),
         listen<{ phase: string; message: string }>("launcher://status", (event) => {
           launcherStatus = event.payload.message;
@@ -192,23 +275,39 @@
             progressByPhase[event.payload.phase] ?? launchProgress ?? 3,
           );
         }),
-        listen("launcher://game-started", () => {
+        listen<string>("launcher://game-started", (event) => {
           gameLogs = [];
-          gameRunning = true;
-          launching = false;
+          runningInstanceIds = [...new Set([...runningInstanceIds, event.payload])];
+          lastGameExitFailed = false;
+          launchingInstanceIds = launchingInstanceIds.filter((id) => id !== event.payload);
           launchProgress = 100;
           launcherStatus = "Minecraft is running";
           if (settings.showLogsOnLaunch) activePage = "logs";
         }),
-        listen<number | null>("launcher://game-exited", (event) => {
-          gameRunning = false;
-          launching = false;
-          launchProgress = null;
-          launcherStatus =
-            event.payload === 0
-              ? "Minecraft closed normally"
-              : `Minecraft exited with code ${event.payload ?? "unknown"}`;
-        }),
+        listen<{ instanceId: string; exitCode: number | null }>(
+          "launcher://game-exited",
+          (event) => {
+            runningInstanceIds = runningInstanceIds.filter((id) => id !== event.payload.instanceId);
+            launchingInstanceIds = launchingInstanceIds.filter(
+              (id) => id !== event.payload.instanceId,
+            );
+            stoppingInstanceIds = stoppingInstanceIds.filter(
+              (id) => id !== event.payload.instanceId,
+            );
+            lastGameExitFailed = event.payload.exitCode !== 0;
+            launchProgress = null;
+            launcherStatus =
+              event.payload.exitCode === 0
+                ? "Minecraft closed normally"
+                : `Minecraft exited with code ${event.payload.exitCode ?? "unknown"}`;
+            if (event.payload.exitCode !== 0 && fabricIssueCandidate) {
+              fabricIssue = fabricIssueCandidate;
+              fabricDialogOpen = true;
+            } else if (event.payload.exitCode === 0) {
+              fabricIssueCandidate = "";
+            }
+          },
+        ),
       ]).then((listeners) => (unlisteners = listeners));
     }
     Promise.all([
@@ -217,17 +316,28 @@
       listInstances(),
       getAccounts(),
       listSupportedVersions(),
+      listRunningInstances(),
     ])
-      .then(([loadedSettings, loadedOverview, loadedInstances, loadedAccounts, loadedVersions]) => {
-        settings = loadedSettings;
-        overview = loadedOverview;
-        instances = loadedInstances;
-        accounts = loadedAccounts.accounts;
-        account =
-          accounts.find((item) => item.uuid === loadedAccounts.activeUuid) ?? accounts[0] ?? null;
-        allVersions = loadedVersions;
-        if (loadedSettings.checkForUpdates) void runAutomaticUpdate();
-      })
+      .then(
+        ([
+          loadedSettings,
+          loadedOverview,
+          loadedInstances,
+          loadedAccounts,
+          loadedVersions,
+          loadedRunning,
+        ]) => {
+          settings = loadedSettings;
+          overview = loadedOverview;
+          instances = loadedInstances;
+          accounts = loadedAccounts.accounts;
+          account =
+            accounts.find((item) => item.uuid === loadedAccounts.activeUuid) ?? accounts[0] ?? null;
+          allVersions = loadedVersions;
+          runningInstanceIds = loadedRunning;
+          if (loadedSettings.checkForUpdates) void runAutomaticUpdate();
+        },
+      )
       .catch((error) => (startupError = messageFromError(error)))
       .finally(() => {
         loading = false;
@@ -281,11 +391,28 @@
             >
               {updateError}
             </div>{/if}
+          {#if gameRunning && fabricIssueCandidate && !fabricDialogOpen}<button
+              onclick={() => {
+                fabricIssue = fabricIssueCandidate;
+                fabricDialogOpen = true;
+              }}
+              class="mb-4 ml-auto flex items-center gap-2 border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-[10px] text-amber-100/75 hover:bg-amber-300/10"
+              aria-live="polite"
+            >
+              <span class="size-1.5 bg-amber-300"></span>Fabric warning detected · Minecraft is
+              still running
+            </button>{/if}
+          {#if fabricRepairNotice}<div
+              class="mb-5 border border-emerald-300/25 bg-emerald-400/[0.07] px-4 py-3 text-xs text-emerald-100"
+            >
+              {fabricRepairNotice}
+            </div>{/if}
           {#if activePage === "instances"}<InstancesPage
               {instances}
               {versions}
               {selectedId}
               installation={modpackInstallation}
+              runningIds={runningInstanceIds}
               onselect={(id) => (selectedId = id)}
               onchanged={refreshInstances}
             />
@@ -299,15 +426,16 @@
               {versions}
               installation={modpackInstallation}
               oninstall={installSelectedModpack}
+              onimport={finishModpackInstall}
             />
           {:else if !instance}<div class="mc-panel p-10 text-center">
-              <h2 class="block-title text-lg uppercase">No instance selected</h2>
+              <h2 class="block-title text-lg uppercase">No profile selected</h2>
               <p class="mt-2 text-sm text-[#7595b7]">
-                Create an instance to start Minecraft or manage mods.
+                Create a profile to start Minecraft or manage mods.
               </p>
               <button
                 onclick={() => (activePage = "instances")}
-                class="mc-primary mt-6 px-5 py-3 text-xs font-bold">Create instance</button
+                class="mc-primary mt-6 px-5 py-3 text-xs font-bold">Create profile</button
               >
             </div>
           {:else if activePage === "home"}<HomePage
@@ -315,9 +443,13 @@
               {versions}
               signedIn={account !== null}
               {launching}
+              running={gameRunning}
+              {stopping}
               progress={launchProgress}
               status={launcherStatus}
-              onplay={play}
+              onplay={() => play()}
+              onconnect={play}
+              onstop={stopSelectedGame}
               onopenmods={() => (activePage = "mods")}
               onversionchange={changeVersion}
             />
@@ -332,6 +464,61 @@
     </main>
   </div>
 </div>
+{#if fabricDialogOpen && fabricIssue}<div
+    class="fixed inset-0 z-[75] grid place-items-center bg-[#010612]/88 p-6"
+    role="presentation"
+    onclick={(event) =>
+      event.currentTarget === event.target && !fabricRepairing && (fabricDialogOpen = false)}
+  >
+    <div
+      class="mc-panel w-full max-w-2xl overflow-hidden border-red-400/30"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="fabric-error-title"
+    >
+      <div class="flex items-start gap-4 border-b border-red-300/15 bg-red-400/[0.08] px-6 py-5">
+        <div
+          class="grid size-11 shrink-0 place-items-center bg-red-400/15 text-xl font-black text-red-200"
+        >
+          !
+        </div>
+        <div>
+          <p class="text-[9px] font-bold uppercase tracking-[.16em] text-red-300/65">
+            Fabric Loader
+          </p>
+          <h2 id="fabric-error-title" class="block-title mt-1 text-lg uppercase">
+            Incompatible mods detected
+          </h2>
+          <p class="mt-2 text-xs leading-5 text-red-100/65">
+            Minecraft could not start correctly. Ninja Launcher can reset incompatible pinned
+            versions and disable an explicitly identified personal conflict mod if required.
+          </p>
+        </div>
+      </div>
+      <div class="p-6">
+        <pre
+          class="max-h-72 overflow-auto whitespace-pre-wrap break-words border border-red-300/12 bg-[#010714] p-4 font-mono text-[10px] leading-5 text-[#d7b8bf]">{fabricIssue}</pre>
+        {#if gameRunning}<p
+            class="mt-3 border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-[10px] text-amber-100/70"
+          >
+            Minecraft is still running. Automatic repair becomes available after the game closes.
+          </p>{/if}
+        <div class="mt-5 flex justify-end gap-3">
+          <button
+            onclick={() => (fabricDialogOpen = false)}
+            disabled={fabricRepairing}
+            class="mc-secondary px-4 py-2.5 text-xs font-bold disabled:opacity-50">Close</button
+          >
+          <button
+            onclick={repairFabric}
+            disabled={fabricRepairing || gameRunning || launching}
+            class="border border-red-300/35 bg-red-400/15 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-red-100 hover:bg-red-400/25 disabled:opacity-50"
+            >{fabricRepairing ? "Repairing…" : "Repair automatically"}</button
+          >
+        </div>
+      </div>
+    </div>
+  </div>{/if}
 {#if accountOpen}<AccountDialog
     bind:account
     bind:accounts

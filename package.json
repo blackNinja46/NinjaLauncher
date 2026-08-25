@@ -1,6 +1,6 @@
 {
   "name": "ninjalauncher",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "",
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
   "license": "MIT",
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1"

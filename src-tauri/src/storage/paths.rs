@@ -49,6 +49,10 @@ impl PathManager {
         self.root.join("account.json")
     }
 
+    pub fn running_instances_file(&self) -> PathBuf {
+        self.root.join("running-instances.json")
+    }
+
     pub fn ensure_directories(&self) -> Result<(), CommandError> {
         for path in [
             self.instances_dir(),

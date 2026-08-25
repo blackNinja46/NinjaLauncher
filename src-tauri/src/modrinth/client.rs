@@ -139,6 +139,23 @@ impl ModrinthClient {
             .json()
             .await?)
     }
+
+    pub async fn versions_by_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<std::collections::HashMap<String, ProjectVersion>, CommandError> {
+        if hashes.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let response = self
+            .0
+            .post(format!("{API}/version_files"))
+            .json(&serde_json::json!({ "hashes": hashes, "algorithm": "sha1" }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(response.json().await?)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -211,6 +228,8 @@ pub struct VersionFile {
     pub url: String,
     pub filename: String,
     pub primary: bool,
+    #[serde(default)]
+    pub size: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]

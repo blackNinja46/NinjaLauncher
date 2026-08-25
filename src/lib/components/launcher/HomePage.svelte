@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { getServerIcon } from "$lib/api/tauri";
   import Icon from "$lib/components/ui/Icon.svelte";
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
@@ -8,9 +10,13 @@
     versions,
     signedIn,
     launching,
+    running,
+    stopping,
     progress,
     status,
     onplay,
+    onconnect,
+    onstop,
     onopenmods,
     onversionchange,
   }: {
@@ -18,12 +24,31 @@
     versions: SupportedVersion[];
     signedIn: boolean;
     launching: boolean;
+    running: boolean;
+    stopping: boolean;
     progress: number | null;
     status: string;
     onplay: () => Promise<void>;
+    onconnect: (serverAddress: string) => Promise<void>;
+    onstop: () => Promise<void>;
     onopenmods: () => void;
     onversionchange: (version: string) => Promise<void>;
   } = $props();
+  const featuredServers = [
+    { name: "blackNinja.Live", address: "blackninja.live" },
+    { name: "NinjaSMP.net", address: "ninjasmp.net" },
+  ];
+  let serverIcons = $state<Record<string, string>>({});
+
+  onMount(() => {
+    for (const server of featuredServers) {
+      getServerIcon(server.address)
+        .then((icon) => {
+          if (icon) serverIcons = { ...serverIcons, [server.address]: icon };
+        })
+        .catch(() => {});
+    }
+  });
 </script>
 
 <PageHeader title="Ready to build?" description="Choose your world, gear up, and jump in." />
@@ -40,7 +65,7 @@
       <div
         class="mb-4 inline-flex items-center gap-2 border border-cyan-300/[0.18] bg-blue-950/55 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.16em] text-cyan-100/70"
       >
-        <span class="size-2 bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>Selected instance
+        <span class="size-2 bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>Selected profile
       </div>
       <h2 class="block-title text-[28px] uppercase text-white">{instance.name}</h2>
       <div class="mt-4 flex items-center gap-2.5">
@@ -54,7 +79,7 @@
             label: `${version.minecraftVersion}${version.versionType === "snapshot" ? " · Snapshot" : ""}`,
           }))}
           onchange={(value) => onversionchange(String(value))}
-          disabled={launching || Boolean(instance.modpack)}
+          disabled={launching || running || Boolean(instance.modpack)}
           ariaLabel="Minecraft version"
           class="min-w-34 text-xs font-bold text-blue-50"
         />
@@ -63,16 +88,21 @@
         >
       </div>
       <div class="mt-7 flex items-center gap-3">
-        <button
-          onclick={onplay}
-          disabled={launching}
-          class="mc-primary flex min-w-[190px] items-center justify-center gap-2 px-8 py-3.5 text-sm font-extrabold disabled:opacity-70"
-          ><Icon name="play" size={17} />{launching
-            ? "PREPARING…"
-            : signedIn
-              ? "PLAY"
-              : "PLAY DEMO"}</button
-        >
+        {#if running}<button
+            onclick={onstop}
+            disabled={stopping}
+            class="flex min-w-[190px] items-center justify-center gap-2 border border-red-300/35 bg-red-500/20 px-8 py-3.5 text-sm font-extrabold text-red-100 hover:bg-red-500/30 disabled:opacity-60"
+            ><span class="size-3 bg-current"></span>{stopping ? "STOPPING…" : "STOP"}</button
+          >{:else}<button
+            onclick={onplay}
+            disabled={launching}
+            class="mc-primary flex min-w-[190px] items-center justify-center gap-2 px-8 py-3.5 text-sm font-extrabold disabled:opacity-70"
+            ><Icon name="play" size={17} />{launching
+              ? "PREPARING…"
+              : signedIn
+                ? "PLAY"
+                : "PLAY DEMO"}</button
+          >{/if}
         <button
           onclick={onopenmods}
           class="mc-secondary px-5 py-3.5 text-sm font-bold text-[#ccecff]">Manage mods</button
@@ -137,6 +167,40 @@
           : `${instance.mods.filter((mod) => mod.enabled).length} mods`}
       </div>
     </div>
+  </div>
+</section>
+<section class="mt-4 border border-white/[0.055] bg-[#031027]/45 px-4 py-3">
+  <div class="mb-2.5 flex items-center justify-between">
+    <p class="text-[9px] font-bold uppercase tracking-[.14em] text-[#58748d]">Featured servers</p>
+    {#if !signedIn}<span class="text-[9px] text-[#695f63]">Sign in for multiplayer</span>{/if}
+  </div>
+  <div class="grid gap-2 sm:grid-cols-2">
+    {#each featuredServers as server}
+      <article
+        class="flex items-center gap-3 border border-white/[0.045] bg-black/10 px-3 py-2.5 transition hover:border-cyan-300/10 hover:bg-cyan-300/[0.025]"
+      >
+        {#if serverIcons[server.address]}<img
+            src={serverIcons[server.address]}
+            alt={`${server.name} server icon`}
+            class="size-8 shrink-0 border border-white/10 bg-[#031237] object-cover opacity-80 [image-rendering:pixelated]"
+          />{:else}<div
+            class="grid size-8 shrink-0 place-items-center border border-white/[0.08] bg-white/[0.025] text-xs font-bold uppercase text-[#71879b]"
+          >
+            {server.name.slice(0, 1)}
+          </div>{/if}
+        <div class="min-w-0 flex-1">
+          <h3 class="truncate text-xs font-semibold text-[#a9bfd2]">{server.name}</h3>
+          <p class="mt-0.5 truncate font-mono text-[9px] text-[#4d687f]">{server.address}</p>
+        </div>
+        <button
+          onclick={() => onconnect(server.address)}
+          disabled={launching || running || !signedIn}
+          title={signedIn ? `Connect to ${server.name}` : "Sign in to use multiplayer"}
+          class="flex items-center gap-1.5 border border-cyan-300/10 bg-cyan-300/[0.035] px-2.5 py-1.5 text-[9px] font-bold text-[#789bb5] transition hover:border-cyan-300/25 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-35"
+          ><Icon name="play" size={10} />Connect</button
+        >
+      </article>
+    {/each}
   </div>
 </section>
 <div class="mc-panel mt-4 flex items-center gap-2 px-4 py-3 text-xs text-[#86a8c7]">

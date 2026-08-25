@@ -9,9 +9,11 @@
     addMod,
     analyzeModConflicts,
     getModDetails,
+    getInstalledModVersions,
     listModVersions,
     messageFromError,
     removeMod,
+    refreshImportedModpackMods,
     searchMods,
     setModEnabled,
     setModVersion,
@@ -62,14 +64,66 @@
   let searchRequest = 0;
   let busyProjectId = $state("");
   let changingMinecraftVersion = $state(false);
+  let installedVersionIds = $state<Record<string, string>>({});
+  let installedVersionsKey = $state("");
+  let updatingAll = $state(false);
+  let refreshedImportedPackId = $state("");
   let searchContext = $state("");
   let installed = $derived(new Set(instance.mods.map((mod) => mod.projectId)));
   let installedMods = $derived(
     [...instance.mods].sort((left, right) => left.name.localeCompare(right.name)),
   );
+  let packMods = $derived(instance.modpack?.packMods ?? []);
   let incompatibleCount = $derived(
     installedMods.filter((mod) => compatibilityFor(mod).state === "incompatible").length,
   );
+  let modUpdates = $derived.by(() =>
+    installedMods.flatMap((mod) => {
+      const available = versionsByProject[mod.projectId] ?? [];
+      const currentVersionId =
+        mod.versionOverrides?.[instance.minecraftVersion] ?? installedVersionIds[mod.projectId];
+      if (!currentVersionId) return [];
+      const currentIndex = available.findIndex((version) => version.id === currentVersionId);
+      if (currentIndex < 0) return [];
+      const latestIndex = available.findIndex((version) => version.versionType === "release");
+      const preferredIndex = latestIndex >= 0 ? latestIndex : 0;
+      if (preferredIndex >= currentIndex) return [];
+      const current = available[currentIndex];
+      const latest = available[preferredIndex];
+      return [
+        {
+          projectId: mod.projectId,
+          name: details[mod.projectId]?.title ?? mod.name,
+          currentName: current?.name ?? currentVersionId,
+          latestId: latest.id,
+          latestName: latest.name,
+        },
+      ];
+    }),
+  );
+
+  $effect(() => {
+    const localPackId = instance.modpack?.projectId === "local-import" ? instance.id : "";
+    if (!localPackId || refreshedImportedPackId === localPackId) return;
+    refreshedImportedPackId = localPackId;
+    refreshImportedModpackMods(localPackId)
+      .then(() => onchanged())
+      .catch((cause) => (error = messageFromError(cause)));
+  });
+
+  $effect(() => {
+    const key = `${instance.id}:${instance.minecraftVersion}`;
+    if (installedVersionsKey === key) return;
+    installedVersionsKey = key;
+    installedVersionIds = {};
+    getInstalledModVersions(instance.id)
+      .then((versions) => {
+        if (installedVersionsKey === key) installedVersionIds = versions;
+      })
+      .catch((cause) => {
+        if (installedVersionsKey === key) error = messageFromError(cause);
+      });
+  });
 
   function compatibilityFor(mod: LauncherInstance["mods"][number]): {
     state: "checking" | "compatible" | "incompatible" | "unknown";
@@ -278,6 +332,45 @@
     }
   }
 
+  async function installUpdate(projectId: string, versionId: string) {
+    error = "";
+    busyProjectId = projectId;
+    try {
+      await setModVersion(instance.id, projectId, instance.minecraftVersion, versionId);
+      installedVersionIds = { ...installedVersionIds, [projectId]: versionId };
+      await onchanged();
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      busyProjectId = "";
+    }
+  }
+
+  async function installAllUpdates() {
+    if (!modUpdates.length) return;
+    updatingAll = true;
+    error = "";
+    try {
+      for (const update of modUpdates) {
+        await setModVersion(
+          instance.id,
+          update.projectId,
+          instance.minecraftVersion,
+          update.latestId,
+        );
+        installedVersionIds = {
+          ...installedVersionIds,
+          [update.projectId]: update.latestId,
+        };
+      }
+      await onchanged();
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      updatingAll = false;
+    }
+  }
+
   async function loadSearchVersions(projectId: string) {
     if (
       versionsByProject[projectId] ||
@@ -339,7 +432,7 @@
         }))}
         onchange={(value) => changeMinecraftVersion(String(value))}
         disabled={changingMinecraftVersion || Boolean(busyProjectId) || Boolean(instance.modpack)}
-        ariaLabel="Minecraft version for this instance"
+        ariaLabel="Minecraft version for this profile"
         class="min-w-48 text-xs font-bold text-blue-50"
       />
     </label>
@@ -360,7 +453,7 @@
       ? 'border-cyan-300 text-cyan-100'
       : 'border-transparent text-[#63809a] hover:text-[#a8c7dc]'}"
     >Installed
-    <span class="ml-1.5 text-[10px] opacity-60">{instance.mods.length}</span>
+    <span class="ml-1.5 text-[10px] opacity-60">{instance.mods.length + packMods.length}</span>
   </button>
   <button
     onclick={() => (view = "search")}
@@ -418,6 +511,46 @@
   </div>
 {/if}
 
+{#if view === "installed" && modUpdates.length}
+  <section class="mb-4 border border-emerald-300/25 bg-emerald-400/[0.07]">
+    <div class="flex items-center justify-between gap-4 border-b border-emerald-300/15 px-4 py-3">
+      <div>
+        <p class="text-xs font-bold uppercase tracking-wider text-emerald-100">
+          {modUpdates.length}
+          {modUpdates.length === 1 ? "mod update" : "mod updates"} available
+        </p>
+        <p class="mt-1 text-[11px] text-emerald-200/60">
+          Updates are downloaded and applied the next time this profile is launched.
+        </p>
+      </div>
+      <button
+        onclick={installAllUpdates}
+        disabled={updatingAll || Boolean(busyProjectId)}
+        class="border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-100 hover:bg-emerald-300/20 disabled:opacity-50"
+        >{updatingAll ? "Updating…" : "Update all"}</button
+      >
+    </div>
+    <div class="divide-y divide-emerald-300/10">
+      {#each modUpdates as update}
+        <div class="flex items-center gap-4 px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-xs font-bold text-[#d5f7eb]">{update.name}</p>
+            <p class="mt-1 truncate text-[10px] text-[#709c91]">
+              {update.currentName} → {update.latestName}
+            </p>
+          </div>
+          <button
+            onclick={() => installUpdate(update.projectId, update.latestId)}
+            disabled={updatingAll || Boolean(busyProjectId)}
+            class="mc-secondary px-3 py-2 text-[10px] font-bold disabled:opacity-50"
+            >{busyProjectId === update.projectId ? "Updating…" : "Update"}</button
+          >
+        </div>
+      {/each}
+    </div>
+  </section>
+{/if}
+
 {#if view === "installed" && checkingConflicts}
   <div class="mb-4 flex items-center gap-2 text-[10px] uppercase tracking-wider text-[#6689a5]">
     <span class="size-2 animate-pulse bg-cyan-400"></span>Checking dependencies between enabled
@@ -438,10 +571,10 @@
       </div>
       <span
         class="border border-cyan-300/20 bg-cyan-300/[0.07] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-200"
-        >{instance.mods.filter((mod) => mod.enabled).length} active</span
+        >{instance.mods.filter((mod) => mod.enabled).length + packMods.length} active</span
       >
     </div>
-    {#if installedMods.length}
+    {#if installedMods.length || packMods.length}
       <div
         class="hidden grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_90px] gap-4 border-b border-white/[0.06] bg-[#041126] px-5 py-2.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#597792] sm:grid"
       >
@@ -450,6 +583,54 @@
         ><span class="text-right">Action</span>
       </div>
       <div class="divide-y divide-white/[0.06]">
+        {#each packMods as mod}
+          <article
+            class="grid gap-3 bg-violet-400/[0.035] px-5 py-4 transition hover:bg-violet-400/[0.06] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_90px] sm:items-center sm:gap-4"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              {#if mod.iconUrl}<img
+                  src={mod.iconUrl}
+                  alt=""
+                  class="size-11 shrink-0 rounded-lg border border-violet-300/15 bg-[#07335d] object-cover"
+                />{:else}<div
+                  class="grid size-11 shrink-0 place-items-center border border-violet-300/15 bg-violet-400/10 text-sm font-black uppercase text-violet-100"
+                >
+                  {mod.name.slice(0, 1)}
+                </div>{/if}
+              <div class="min-w-0">
+                {#if mod.projectId}<button
+                    onclick={() => mod.projectId && openProject(mod.projectId)}
+                    class="block max-w-full truncate text-left text-sm font-semibold text-[#edf8ff] hover:text-violet-200 hover:underline"
+                    >{mod.name}</button
+                  >{:else}<p class="truncate text-sm font-semibold text-[#edf8ff]">
+                    {mod.name}
+                  </p>{/if}
+                <p class="mt-1 truncate font-mono text-[10px] text-[#665f91]">
+                  {mod.projectId ?? "External mod"}
+                </p>
+              </div>
+            </div>
+            <div class="min-w-0">
+              <p class="truncate text-[11px] font-semibold text-[#c8c3ec]">{mod.versionName}</p>
+              <p class="mt-1.5 truncate font-mono text-[9px] text-[#615d82]">
+                {mod.versionId ?? "No Modrinth match"}
+              </p>
+            </div>
+            <div>
+              <span
+                class="inline-flex items-center gap-1.5 border border-violet-300/20 bg-violet-400/10 px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-wider text-violet-200"
+              >
+                <Icon name={mod.projectId ? "check" : "mods"} size={10} />{mod.projectId
+                  ? "Modrinth match"
+                  : "External mod"}
+              </span>
+            </div>
+            <span
+              class="justify-self-start text-[9px] font-bold uppercase tracking-wider text-[#625f7e] sm:justify-self-end"
+              >Read only</span
+            >
+          </article>
+        {/each}
         {#each installedMods as mod}
           {@const project = details[mod.projectId]}
           {@const availableVersions = versionsByProject[mod.projectId]}

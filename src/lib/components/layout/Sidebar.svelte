@@ -20,7 +20,7 @@
     { id: "home", label: "Home" },
     { id: "mods", label: "Mods" },
     { id: "modpacks", label: "Modpacks" },
-    { id: "instances", label: "Instances" },
+    { id: "instances", label: "Profiles" },
     { id: "logs", label: "Logs" },
     { id: "settings", label: "Settings" },
   ];

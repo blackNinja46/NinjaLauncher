@@ -54,7 +54,7 @@ pub fn list(paths: &PathManager) -> Result<Vec<InstanceConfig>, CommandError> {
 pub fn load(paths: &PathManager, id: &str) -> Result<InstanceConfig, CommandError> {
     let manifest = instance_dir(paths, id)?.join("instance.json");
     if !manifest.is_file() {
-        return Err(CommandError::new("The selected instance no longer exists."));
+        return Err(CommandError::new("The selected profile no longer exists."));
     }
     Ok(serde_json::from_slice(&std::fs::read(manifest)?)?)
 }
@@ -68,7 +68,7 @@ pub fn save(paths: &PathManager, instance: &InstanceConfig) -> Result<(), Comman
     }
     validate_version(&instance.loader_version)?;
     if instance.name.trim().is_empty() {
-        return Err(CommandError::new("Instance name cannot be empty."));
+        return Err(CommandError::new("Profile name cannot be empty."));
     }
     let directory = instance_dir(paths, &instance.id)?;
     for child in [
@@ -106,7 +106,7 @@ fn validate_id(id: &str) -> Result<(), CommandError> {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'
         })
     {
-        return Err(CommandError::new("The instance identifier is invalid."));
+        return Err(CommandError::new("The profile identifier is invalid."));
     }
     Ok(())
 }

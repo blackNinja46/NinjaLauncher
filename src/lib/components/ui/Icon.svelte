@@ -35,6 +35,7 @@
   {:else if name === "chevron"}<path d="m9 18 6-6-6-6" />
   {:else if name === "plus"}<path d="M12 5v14M5 12h14" />
   {:else if name === "download"}<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" />
+  {:else if name === "upload"}<path d="M12 16V4m0 0 4 4m-4-4-4 4M5 20h14" />
   {:else if name === "folder"}<path d="M3 6h7l2 2h9v11H3z" />
   {:else if name === "logs"}<path d="M4 4h16v16H4z" /><path d="m7 9 2 2-2 2M12 14h5" />
   {:else if name === "check"}<path d="m5 12 4 4L19 6" />

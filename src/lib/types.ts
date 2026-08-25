@@ -44,6 +44,15 @@ export interface InstalledModpack {
   name: string;
   iconUrl: string | null;
   fileCount: number;
+  packMods: PackMod[];
+}
+
+export interface PackMod {
+  projectId: string | null;
+  versionId: string | null;
+  name: string;
+  versionName: string;
+  iconUrl: string | null;
 }
 
 export interface ModpackInstallation {
@@ -54,10 +63,31 @@ export interface ModpackInstallation {
   error?: string;
 }
 
+export interface ModpackFileInspection {
+  path: string;
+  name: string;
+  versionId: string;
+  minecraftVersion: string;
+  loaderVersion: string;
+  fileCount: number;
+  foreignMods: string[];
+}
+
+export interface ModpackExportReport {
+  path: string;
+  fileCount: number;
+  foreignMods: string[];
+}
+
 export interface SupportedVersion {
   minecraftVersion: string;
   fabricLoaderVersion: string;
   versionType: "release" | "snapshot";
+}
+
+export interface FabricLoaderVersionOption {
+  version: string;
+  stable: boolean;
 }
 
 export interface ModrinthHit {
@@ -87,6 +117,10 @@ export interface ModConflictReport {
   compatible: boolean;
   message: string | null;
   projectIds: string[];
+}
+export interface ModRepairReport {
+  resetVersions: number;
+  disabledMods: string[];
 }
 export interface ModrinthSearchResponse {
   hits: ModrinthHit[];

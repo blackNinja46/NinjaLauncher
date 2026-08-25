@@ -7,6 +7,7 @@ use crate::{
     java,
     loaders::fabric,
     minecraft::metadata::{self, AssetIndex, Download, Library, VersionManifest, VersionMetadata},
+    minecraft::processes::GameProcesses,
     modrinth::{client::ModrinthClient, resolver},
     storage::{config, paths::PathManager},
 };
@@ -15,9 +16,13 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Stdio,
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    net::TcpStream,
+};
 
 const VERSION_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
@@ -32,6 +37,13 @@ pub struct LaunchStatus {
 struct GameLogLine {
     stream: &'static str,
     line: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameExit {
+    instance_id: String,
+    exit_code: Option<i32>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -54,8 +66,15 @@ pub async fn launch(
     modrinth: &ModrinthClient,
     instance_id: &str,
     demo: bool,
+    server_address: Option<&str>,
 ) -> Result<(), CommandError> {
-    emit(&app, "validate", "Validating account and instance");
+    emit(&app, "validate", "Validating account and profile");
+    let server_address = validate_server_address(server_address)?;
+    if demo && server_address.is_some() {
+        return Err(CommandError::new(
+            "Sign in with your Microsoft account before joining an online server.",
+        ));
+    }
     let instance = instance_manager::load(paths, instance_id)?;
     let mut account = if demo {
         microsoft::Account::demo()
@@ -139,6 +158,7 @@ pub async fn launch(
             close_on_launch: settings.close_on_launch,
             reopen_on_exit: settings.reopen_on_exit,
             demo,
+            server_address: server_address.as_deref(),
         },
     )
     .await
@@ -551,6 +571,7 @@ struct ProcessInputs<'a> {
     close_on_launch: bool,
     reopen_on_exit: bool,
     demo: bool,
+    server_address: Option<&'a str>,
 }
 
 async fn start_process(
@@ -569,6 +590,7 @@ async fn start_process(
         close_on_launch,
         reopen_on_exit,
         demo,
+        server_address,
     } = input;
     let separator = if cfg!(windows) { ";" } else { ":" };
     let classpath = prepared
@@ -632,6 +654,10 @@ async fn start_process(
     if demo && !game.iter().any(|argument| argument == "--demo") {
         game.push("--demo".into());
     }
+    if let Some(address) = server_address {
+        game.push("--quickPlayMultiplayer".into());
+        game.push(address.into());
+    }
     let mut command = tokio::process::Command::new(java);
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -645,6 +671,13 @@ async fn start_process(
     let mut child = command
         .spawn()
         .map_err(|error| CommandError::new(format!("Minecraft could not be started: {error}")))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| CommandError::new("Minecraft started without a process identifier."))?;
+    if let Err(error) = app.state::<GameProcesses>().register(&instance.id, pid) {
+        child.start_kill().ok();
+        return Err(error);
+    }
     app.state::<DiscordPresence>()
         .show_playing(&instance.name, &instance.minecraft_version);
     app.emit("launcher://game-started", &instance.id).ok();
@@ -691,6 +724,7 @@ async fn start_process(
             }
         });
     }
+    let instance_id = instance.id.clone();
     tokio::spawn(async move {
         let result = child.wait().await;
         if reopen_on_exit {
@@ -700,13 +734,153 @@ async fn start_process(
             }
         }
         app.state::<DiscordPresence>().show_launcher();
+        app.state::<GameProcesses>().unregister(&instance_id, pid);
         app.emit(
             "launcher://game-exited",
-            result.ok().and_then(|status| status.code()),
+            GameExit {
+                instance_id,
+                exit_code: result.ok().and_then(|status| status.code()),
+            },
         )
         .ok();
     });
     Ok(())
+}
+
+fn validate_server_address(value: Option<&str>) -> Result<Option<String>, CommandError> {
+    let Some(address) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if address.len() > 253
+        || !address.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '-' | '_' | ':' | '[' | ']')
+        })
+    {
+        return Err(CommandError::new("The server address is invalid."));
+    }
+    Ok(Some(address.to_string()))
+}
+
+pub async fn fetch_server_icon(server_address: &str) -> Result<Option<String>, CommandError> {
+    let address = validate_server_address(Some(server_address))?
+        .ok_or_else(|| CommandError::new("The server address is empty."))?;
+    let (host, port) = server_endpoint(&address)?;
+    tokio::time::timeout(Duration::from_secs(5), async move {
+        let mut stream = TcpStream::connect((host.as_str(), port)).await?;
+        let mut handshake = Vec::new();
+        write_varint(&mut handshake, 0);
+        write_varint(&mut handshake, 769);
+        write_varint(&mut handshake, host.len() as i32);
+        handshake.extend_from_slice(host.as_bytes());
+        handshake.extend_from_slice(&port.to_be_bytes());
+        write_varint(&mut handshake, 1);
+
+        let mut packet = Vec::new();
+        write_varint(&mut packet, handshake.len() as i32);
+        packet.extend(handshake);
+        packet.extend_from_slice(&[1, 0]);
+        stream.write_all(&packet).await?;
+
+        let length = read_varint(&mut stream).await?;
+        if !(1..=1_048_576).contains(&length) {
+            return Err(CommandError::new(
+                "The server returned an invalid status response.",
+            ));
+        }
+        let mut response = vec![0; length as usize];
+        stream.read_exact(&mut response).await?;
+        let mut offset = 0;
+        if read_varint_slice(&response, &mut offset)? != 0 {
+            return Err(CommandError::new(
+                "The server returned an unexpected status packet.",
+            ));
+        }
+        let json_length = read_varint_slice(&response, &mut offset)?;
+        if json_length < 0 || offset + json_length as usize > response.len() {
+            return Err(CommandError::new(
+                "The server returned an invalid status document.",
+            ));
+        }
+        let status: serde_json::Value =
+            serde_json::from_slice(&response[offset..offset + json_length as usize])?;
+        Ok(status
+            .get("favicon")
+            .and_then(|value| value.as_str())
+            .filter(|icon| icon.starts_with("data:image/png;base64,") && icon.len() <= 524_288)
+            .map(str::to_string))
+    })
+    .await
+    .map_err(|_| CommandError::new("The server status request timed out."))?
+}
+
+fn server_endpoint(address: &str) -> Result<(String, u16), CommandError> {
+    if let Some(host) = address.strip_prefix('[') {
+        let end = host
+            .find(']')
+            .ok_or_else(|| CommandError::new("The IPv6 server address is invalid."))?;
+        let hostname = &host[..end];
+        let port = host[end + 1..]
+            .strip_prefix(':')
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| CommandError::new("The server port is invalid."))?
+            .unwrap_or(25565);
+        return Ok((hostname.into(), port));
+    }
+    if let Some((host, port)) = address.rsplit_once(':') {
+        if !host.contains(':') {
+            return Ok((
+                host.into(),
+                port.parse()
+                    .map_err(|_| CommandError::new("The server port is invalid."))?,
+            ));
+        }
+    }
+    Ok((address.into(), 25565))
+}
+
+fn write_varint(output: &mut Vec<u8>, value: i32) {
+    let mut value = value as u32;
+    loop {
+        if value & !0x7f == 0 {
+            output.push(value as u8);
+            return;
+        }
+        output.push(((value & 0x7f) | 0x80) as u8);
+        value >>= 7;
+    }
+}
+
+async fn read_varint(stream: &mut TcpStream) -> Result<i32, CommandError> {
+    let mut value = 0u32;
+    for shift in (0..35).step_by(7) {
+        let byte = stream.read_u8().await?;
+        value |= ((byte & 0x7f) as u32) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value as i32);
+        }
+    }
+    Err(CommandError::new(
+        "The server returned an invalid packet length.",
+    ))
+}
+
+fn read_varint_slice(input: &[u8], offset: &mut usize) -> Result<i32, CommandError> {
+    let mut value = 0u32;
+    for shift in (0..35).step_by(7) {
+        let byte = *input
+            .get(*offset)
+            .ok_or_else(|| CommandError::new("The server status packet was truncated."))?;
+        *offset += 1;
+        value |= ((byte & 0x7f) as u32) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value as i32);
+        }
+    }
+    Err(CommandError::new(
+        "The server returned an invalid variable integer.",
+    ))
 }
 
 fn clean_game_log_line(line: &str) -> Option<String> {
@@ -770,6 +944,20 @@ fn emit(app: &AppHandle, phase: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_direct_connect_addresses() {
+        assert_eq!(
+            validate_server_address(Some(" blackninja.live ")).expect("valid server"),
+            Some("blackninja.live".into())
+        );
+        assert_eq!(
+            validate_server_address(Some("ninjasmp.net:25565")).expect("valid server with port"),
+            Some("ninjasmp.net:25565".into())
+        );
+        assert!(validate_server_address(Some("https://example.com")).is_err());
+        assert!(validate_server_address(Some("example.com --demo")).is_err());
+    }
 
     #[test]
     fn library_paths_cannot_escape_the_cache() {

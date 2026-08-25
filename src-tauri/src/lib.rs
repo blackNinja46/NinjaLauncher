@@ -17,6 +17,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -31,6 +32,9 @@ pub fn run() {
             app.manage(paths);
             app.manage(modrinth::client::ModrinthClient::new()?);
             app.manage(discord_presence);
+            app.manage(minecraft::processes::GameProcesses::new(
+                app.state::<PathManager>().inner(),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,6 +45,7 @@ pub fn run() {
             commands::settings::save_settings,
             commands::instances::list_instances,
             commands::instances::list_supported_versions,
+            commands::instances::list_fabric_loader_versions,
             commands::instances::save_instance,
             commands::instances::create_instance,
             commands::instances::duplicate_instance,
@@ -49,7 +54,9 @@ pub fn run() {
             commands::mods::search_mods,
             commands::mods::get_mod_details,
             commands::mods::list_mod_versions,
+            commands::mods::get_installed_mod_versions,
             commands::mods::analyze_mod_conflicts,
+            commands::mods::repair_mod_configuration,
             commands::mods::add_mod,
             commands::mods::remove_mod,
             commands::mods::set_mod_enabled,
@@ -57,6 +64,11 @@ pub fn run() {
             commands::modpacks::search_modpacks,
             commands::modpacks::list_modpack_versions,
             commands::modpacks::install_modpack,
+            commands::modpacks::inspect_modpack_file,
+            commands::modpacks::import_modpack_file,
+            commands::modpacks::refresh_imported_modpack_mods,
+            commands::modpacks::list_exportable_folders,
+            commands::modpacks::export_modpack,
             commands::accounts::get_account,
             commands::accounts::get_accounts,
             commands::accounts::begin_microsoft_login,
@@ -64,7 +76,10 @@ pub fn run() {
             commands::accounts::switch_microsoft_account,
             commands::accounts::remove_microsoft_account,
             commands::accounts::logout,
-            commands::minecraft::launch_game
+            commands::minecraft::launch_game,
+            commands::minecraft::get_server_icon,
+            commands::minecraft::list_running_instances,
+            commands::minecraft::stop_game
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

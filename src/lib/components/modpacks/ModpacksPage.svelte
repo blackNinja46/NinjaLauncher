@@ -5,8 +5,16 @@
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import Pagination from "$lib/components/ui/Pagination.svelte";
   import { onMount } from "svelte";
-  import { listModpackVersions, messageFromError, searchModpacks } from "$lib/api/tauri";
+  import {
+    chooseModpackFile,
+    importModpackFile,
+    listModpackVersions,
+    messageFromError,
+    searchModpacks,
+  } from "$lib/api/tauri";
   import type {
+    LauncherInstance,
+    ModpackFileInspection,
     ModpackInstallation,
     ModrinthHit,
     ModrinthVersion,
@@ -17,10 +25,12 @@
     versions,
     installation,
     oninstall,
+    onimport,
   }: {
     versions: SupportedVersion[];
     installation: ModpackInstallation | null;
     oninstall: (pack: ModrinthHit, versionId: string) => Promise<void>;
+    onimport: (instance: LauncherInstance) => Promise<void>;
   } = $props();
 
   let query = $state("");
@@ -34,6 +44,8 @@
   let total = $state(0);
   let searchRequest = 0;
   let error = $state("");
+  let inspection = $state<ModpackFileInspection | null>(null);
+  let importing = $state(false);
   let busyProjectId = $derived(installation?.phase === "installing" ? installation.projectId : "");
 
   async function loadPage(nextPage: number, searchQuery = query) {
@@ -112,12 +124,47 @@
     if ("__TAURI_INTERNALS__" in window) await openUrl(url);
     else window.open(url, "_blank", "noopener,noreferrer");
   }
+
+  async function chooseImport() {
+    error = "";
+    try {
+      const selected = await chooseModpackFile();
+      if (!selected) return;
+      if (selected.foreignMods.length) inspection = selected;
+      else await runImport(selected, false);
+    } catch (cause) {
+      error = messageFromError(cause);
+    }
+  }
+
+  async function runImport(selected: ModpackFileInspection, allowForeignMods: boolean) {
+    importing = true;
+    error = "";
+    try {
+      const created = await importModpackFile(selected.path, allowForeignMods);
+      inspection = null;
+      await onimport(created);
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      importing = false;
+    }
+  }
 </script>
 
-<PageHeader
-  title="Modpacks"
-  description="Install complete Fabric packs from Modrinth as isolated instances."
-/>
+<div class="flex items-start justify-between gap-5">
+  <PageHeader
+    title="Modpacks"
+    description="Install complete Fabric packs from Modrinth as isolated profiles."
+  />
+  <button
+    onclick={chooseImport}
+    disabled={importing || installation?.phase === "installing"}
+    class="mc-secondary flex shrink-0 items-center gap-2 px-4 py-2.5 text-xs font-bold disabled:opacity-50"
+  >
+    <Icon name="upload" size={15} />{importing ? "Importing…" : "Import .mrpack"}
+  </button>
+</div>
 
 <form onsubmit={search} class="mb-6 flex gap-2.5">
   <label
@@ -138,6 +185,58 @@
 {#if error}
   <div class="mb-5 border border-red-400/25 bg-red-400/[0.08] px-4 py-3 text-xs text-red-200">
     {error}
+  </div>
+{/if}
+
+{#if inspection}
+  <div
+    class="fixed inset-0 z-50 grid place-items-center bg-[#010612]/85 p-6"
+    role="presentation"
+    onclick={(event) => event.currentTarget === event.target && !importing && (inspection = null)}
+  >
+    <div
+      class="mc-panel w-full max-w-lg border-amber-300/30 p-6"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="foreign-mods-title"
+    >
+      <div
+        class="mb-4 grid size-11 place-items-center border border-amber-300/30 bg-amber-300/10 text-xl font-bold text-amber-200"
+      >
+        !
+      </div>
+      <h2 id="foreign-mods-title" class="block-title text-lg uppercase">
+        Unverified mods in {inspection.name}
+      </h2>
+      <p class="mt-3 text-sm leading-6 text-[#9bb2c7]">
+        {inspection.foreignMods.length}
+        {inspection.foreignMods.length === 1 ? "mod was" : "mods were"}
+        not found by checksum on Modrinth. These files may come from another platform or a private source.
+        Only continue if you trust the pack author.
+      </p>
+      <div class="mt-4 max-h-36 overflow-y-auto border border-amber-300/15 bg-black/15 p-3">
+        {#each inspection.foreignMods as mod}
+          <p class="truncate py-1 font-mono text-[11px] text-amber-100/80">{mod}</p>
+        {/each}
+      </div>
+      <p class="mt-3 text-[10px] text-[#66839d]">
+        Minecraft {inspection.minecraftVersion} · Fabric {inspection.loaderVersion} · checksum comparison
+        via Modrinth
+      </p>
+      <div class="mt-6 flex justify-end gap-3">
+        <button
+          onclick={() => (inspection = null)}
+          disabled={importing}
+          class="mc-secondary px-4 py-2.5 text-xs font-bold disabled:opacity-50">Cancel</button
+        >
+        <button
+          onclick={() => inspection && runImport(inspection, true)}
+          disabled={importing}
+          class="border border-amber-300/35 bg-amber-400/15 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-amber-100 hover:bg-amber-400/25 disabled:opacity-50"
+          >{importing ? "Importing…" : "Trust and import"}</button
+        >
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -234,7 +333,7 @@
       <p class="mt-1.5 text-xs text-[#5f7b94]">
         {searched
           ? "Try another name."
-          : "Each pack is installed into a separate instance with its own configs and files."}
+          : "Each pack is installed into a separate profile with its own configs and files."}
       </p>
     </div>
   </div>
