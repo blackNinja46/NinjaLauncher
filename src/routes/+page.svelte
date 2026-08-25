@@ -81,7 +81,8 @@
   let fabricIssue = $state("");
   let fabricIssueCandidate = $state("");
   let fabricDialogOpen = $state(false);
-  let lastGameExitFailed = $state(false);
+  let gameProcessExited = $state(false);
+  let minecraftClientStarted = $state(false);
   let fabricRepairing = $state(false);
   let fabricRepairNotice = $state("");
   let showWindowsTitlebar = $state(false);
@@ -110,19 +111,31 @@
     if (!instances.some((item) => item.id === selectedId)) selectedId = instances[0]?.id ?? "";
   }
 
-  function isFabricIssue(message: string): boolean {
-    return /incompatible mods? found|incompatible mod set|mod resolution|dependency requirements|not compatible with minecraft|fabric.*(?:error|failed|exception)|formattedexception|potential solution has been determined/i.test(
+  function startsRepairableFabricLoaderFailure(message: string): boolean {
+    return /incompatible mods? found|incompatible mod set|formattedexception:\s*some of your mods are incompatible/i.test(
       message,
     );
   }
 
   function collectFabricIssue(line: string) {
-    if (!fabricIssueCandidate && !isFabricIssue(line)) return;
+    if (
+      /\[Render thread\/INFO\]|setting user:|backend library:\s*lwjgl|lwjgl version/i.test(line)
+    ) {
+      minecraftClientStarted = true;
+    }
+    const startsFailure = !fabricIssueCandidate && startsRepairableFabricLoaderFailure(line);
+    if (!fabricIssueCandidate && !startsFailure) return;
     if (fabricIssueCandidate.length >= 16_000) return;
     fabricIssueCandidate = fabricIssueCandidate ? `${fabricIssueCandidate}\n${line}` : line;
-    if (lastGameExitFailed && !gameRunning) {
+    if (startsFailure && gameProcessExited) window.setTimeout(finalizeFabricFailure, 300);
+  }
+
+  function finalizeFabricFailure() {
+    if (gameProcessExited && fabricIssueCandidate && !minecraftClientStarted) {
       fabricIssue = fabricIssueCandidate;
       fabricDialogOpen = true;
+    } else if (gameProcessExited && minecraftClientStarted) {
+      fabricIssueCandidate = "";
     }
   }
 
@@ -199,7 +212,8 @@
     fabricIssue = "";
     fabricIssueCandidate = "";
     fabricDialogOpen = false;
-    lastGameExitFailed = false;
+    gameProcessExited = false;
+    minecraftClientStarted = false;
     fabricRepairNotice = "";
     launchingInstanceIds = [...launchingInstanceIds, launchingId];
     launchProgress = 3;
@@ -219,11 +233,6 @@
       launchingInstanceIds = launchingInstanceIds.filter((id) => id !== launchingId);
       launchProgress = null;
       launcherStatus = messageFromError(error);
-      if (isFabricIssue(launcherStatus)) {
-        fabricIssue = launcherStatus;
-        fabricIssueCandidate = launcherStatus;
-        fabricDialogOpen = true;
-      }
     }
   }
 
@@ -278,7 +287,8 @@
         listen<string>("launcher://game-started", (event) => {
           gameLogs = [];
           runningInstanceIds = [...new Set([...runningInstanceIds, event.payload])];
-          lastGameExitFailed = false;
+          gameProcessExited = false;
+          minecraftClientStarted = false;
           launchingInstanceIds = launchingInstanceIds.filter((id) => id !== event.payload);
           launchProgress = 100;
           launcherStatus = "Minecraft is running";
@@ -294,18 +304,13 @@
             stoppingInstanceIds = stoppingInstanceIds.filter(
               (id) => id !== event.payload.instanceId,
             );
-            lastGameExitFailed = event.payload.exitCode !== 0;
+            gameProcessExited = true;
             launchProgress = null;
             launcherStatus =
               event.payload.exitCode === 0
                 ? "Minecraft closed normally"
                 : `Minecraft exited with code ${event.payload.exitCode ?? "unknown"}`;
-            if (event.payload.exitCode !== 0 && fabricIssueCandidate) {
-              fabricIssue = fabricIssueCandidate;
-              fabricDialogOpen = true;
-            } else if (event.payload.exitCode === 0) {
-              fabricIssueCandidate = "";
-            }
+            window.setTimeout(finalizeFabricFailure, 300);
           },
         ),
       ]).then((listeners) => (unlisteners = listeners));
