@@ -439,7 +439,7 @@ pub async fn export_modpack(
         instance
             .mods
             .iter()
-            .filter(|item| item.enabled)
+            .filter(|item| item.enabled_for(&instance.minecraft_version))
             .map(|item| item.project_id.clone())
             .collect()
     } else {
@@ -449,7 +449,7 @@ pub async fn export_modpack(
         instance
             .mods
             .iter()
-            .filter(|item| item.enabled)
+            .filter(|item| item.enabled_for(&instance.minecraft_version))
             .filter_map(|item| {
                 item.version_overrides
                     .get(&instance.minecraft_version)

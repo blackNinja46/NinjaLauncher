@@ -473,13 +473,13 @@ async fn sync_mods(
     let roots: Vec<_> = instance
         .mods
         .iter()
-        .filter(|item| item.enabled)
+        .filter(|item| item.enabled_for(&instance.minecraft_version))
         .map(|item| item.project_id.clone())
         .collect();
     let pinned_versions: HashMap<_, _> = instance
         .mods
         .iter()
-        .filter(|item| item.enabled)
+        .filter(|item| item.enabled_for(&instance.minecraft_version))
         .filter_map(|item| {
             item.version_overrides
                 .get(&instance.minecraft_version)

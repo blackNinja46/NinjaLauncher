@@ -39,6 +39,9 @@
   {:else if name === "folder"}<path d="M3 6h7l2 2h9v11H3z" />
   {:else if name === "logs"}<path d="M4 4h16v16H4z" /><path d="m7 9 2 2-2 2M12 14h5" />
   {:else if name === "check"}<path d="m5 12 4 4L19 6" />
+  {:else if name === "info"}<circle cx="12" cy="12" r="9" /><path d="M12 11v6" /><path
+      d="M12 7h.01"
+    />
   {:else if name === "more"}<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle
       cx="12"
       cy="12"

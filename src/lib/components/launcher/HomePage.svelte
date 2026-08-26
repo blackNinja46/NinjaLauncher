@@ -164,7 +164,13 @@
       <div class="mt-1.5 text-sm font-medium">
         {instance.modpack
           ? `${instance.modpack.fileCount} pack files`
-          : `${instance.mods.filter((mod) => mod.enabled).length} mods`}
+          : `${
+              instance.mods.filter((mod) =>
+                mod.enabled
+                  ? !mod.disabledVersions?.includes(instance.minecraftVersion)
+                  : mod.enabledVersions?.includes(instance.minecraftVersion),
+              ).length
+            } mods`}
       </div>
     </div>
   </div>

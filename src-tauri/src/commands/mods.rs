@@ -124,7 +124,11 @@ pub async fn analyze_mod_conflicts(
     client: State<'_, ModrinthClient>,
 ) -> Result<ModConflictReport, CommandError> {
     let instance = manager::load(&paths, &instance_id)?;
-    let enabled: Vec<_> = instance.mods.iter().filter(|item| item.enabled).collect();
+    let enabled: Vec<_> = instance
+        .mods
+        .iter()
+        .filter(|item| item.enabled_for(&instance.minecraft_version))
+        .collect();
     let roots: Vec<_> = enabled.iter().map(|item| item.project_id.clone()).collect();
     let pinned_versions: HashMap<_, _> = enabled
         .iter()
@@ -192,7 +196,7 @@ pub async fn repair_mod_configuration(
         let roots: Vec<_> = instance
             .mods
             .iter()
-            .filter(|item| item.enabled)
+            .filter(|item| item.enabled_for(&instance.minecraft_version))
             .map(|item| item.project_id.clone())
             .collect();
         match resolver::resolve(
@@ -215,7 +219,7 @@ pub async fn repair_mod_configuration(
                 let normalized = error.message.to_lowercase();
                 let candidate = instance.mods.iter().rposition(|item| {
                     let name = item.name.to_lowercase();
-                    item.enabled
+                    item.enabled_for(&instance.minecraft_version)
                         && (normalized.contains(&item.project_id.to_lowercase())
                             || (name.len() >= 4 && normalized.contains(&name)))
                 });
@@ -224,7 +228,7 @@ pub async fn repair_mod_configuration(
                         "Automatic Fabric repair could not safely identify the affected personal mod. {error}",
                     )));
                 };
-                instance.mods[index].enabled = false;
+                instance.mods[index].set_enabled_for(&minecraft_version, false);
                 disabled_mods.push(instance.mods[index].name.clone());
             }
         }
@@ -258,7 +262,7 @@ pub async fn add_mod(
         .iter_mut()
         .find(|item| item.project_id == project_id)
     {
-        existing.enabled = true;
+        existing.set_enabled_for(&minecraft_version, true);
         if let Some(version_id) = version_id {
             existing
                 .version_overrides
@@ -273,6 +277,8 @@ pub async fn add_mod(
             project_id,
             name,
             enabled: true,
+            disabled_versions: Default::default(),
+            enabled_versions: Default::default(),
             version_overrides,
         });
     }
@@ -298,12 +304,13 @@ pub fn set_mod_enabled(
     paths: State<'_, PathManager>,
 ) -> Result<(), CommandError> {
     let mut instance = manager::load(&paths, &instance_id)?;
+    let minecraft_version = instance.minecraft_version.clone();
     let selected = instance
         .mods
         .iter_mut()
         .find(|item| item.project_id == project_id)
         .ok_or_else(|| CommandError::new("The selected mod is not installed in this profile."))?;
-    selected.enabled = enabled;
+    selected.set_enabled_for(&minecraft_version, enabled);
     manager::save(&paths, &instance)
 }
 

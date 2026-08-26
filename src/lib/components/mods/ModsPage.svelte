@@ -66,7 +66,8 @@
   let changingMinecraftVersion = $state(false);
   let installedVersionIds = $state<Record<string, string>>({});
   let installedVersionsKey = $state("");
-  let updatingAll = $state(false);
+  let updatingProjectId = $state("");
+  let versionInfoOpen = $state(false);
   let refreshedImportedPackId = $state("");
   let searchContext = $state("");
   let installed = $derived(new Set(instance.mods.map((mod) => mod.projectId)));
@@ -75,10 +76,12 @@
   );
   let packMods = $derived(instance.modpack?.packMods ?? []);
   let incompatibleCount = $derived(
-    installedMods.filter((mod) => compatibilityFor(mod).state === "incompatible").length,
+    installedMods.filter((mod) => modEnabled(mod) && compatibilityFor(mod).state === "incompatible")
+      .length,
   );
   let modUpdates = $derived.by(() =>
     installedMods.flatMap((mod) => {
+      if (!modEnabled(mod)) return [];
       const available = versionsByProject[mod.projectId] ?? [];
       const currentVersionId =
         mod.versionOverrides?.[instance.minecraftVersion] ?? installedVersionIds[mod.projectId];
@@ -129,6 +132,9 @@
     state: "checking" | "compatible" | "incompatible" | "unknown";
     message: string;
   } {
+    if (!modEnabled(mod)) {
+      return { state: "unknown", message: `Disabled for ${instance.minecraftVersion}` };
+    }
     if (conflictReport.projectIds.includes(mod.projectId)) {
       return { state: "incompatible", message: "Conflicts with another enabled mod" };
     }
@@ -150,12 +156,18 @@
     return { state: "compatible", message: `Compatible with ${instance.minecraftVersion}` };
   }
 
+  function modEnabled(mod: LauncherInstance["mods"][number]): boolean {
+    return mod.enabled
+      ? !mod.disabledVersions?.includes(instance.minecraftVersion)
+      : Boolean(mod.enabledVersions?.includes(instance.minecraftVersion));
+  }
+
   $effect(() => {
     const key = `${instance.id}:${instance.minecraftVersion}:${instance.mods
       .map((mod) =>
         [
           mod.projectId,
-          mod.enabled,
+          modEnabled(mod),
           mod.versionOverrides?.[instance.minecraftVersion] ?? "automatic",
         ].join(":"),
       )
@@ -335,6 +347,7 @@
   async function installUpdate(projectId: string, versionId: string) {
     error = "";
     busyProjectId = projectId;
+    updatingProjectId = projectId;
     try {
       await setModVersion(instance.id, projectId, instance.minecraftVersion, versionId);
       installedVersionIds = { ...installedVersionIds, [projectId]: versionId };
@@ -343,31 +356,7 @@
       error = messageFromError(cause);
     } finally {
       busyProjectId = "";
-    }
-  }
-
-  async function installAllUpdates() {
-    if (!modUpdates.length) return;
-    updatingAll = true;
-    error = "";
-    try {
-      for (const update of modUpdates) {
-        await setModVersion(
-          instance.id,
-          update.projectId,
-          instance.minecraftVersion,
-          update.latestId,
-        );
-        installedVersionIds = {
-          ...installedVersionIds,
-          [update.projectId]: update.latestId,
-        };
-      }
-      await onchanged();
-    } catch (cause) {
-      error = messageFromError(cause);
-    } finally {
-      updatingAll = false;
+      updatingProjectId = "";
     }
   }
 
@@ -421,8 +410,20 @@
   <PageHeader title="Mods" description={`Manage mods for ${instance.name}.`} />
   <div class="flex items-end gap-3">
     <label class="block">
-      <span class="mb-1.5 block text-[9px] font-bold uppercase tracking-[.12em] text-[#63809a]"
-        >Minecraft version</span
+      <span
+        class="mb-1.5 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#63809a]"
+        >Minecraft version
+        <button
+          type="button"
+          onclick={(event) => {
+            event.preventDefault();
+            versionInfoOpen = true;
+          }}
+          title="How version switching works"
+          aria-label="Explain Minecraft version switching"
+          class="grid size-4 place-items-center rounded-full border border-cyan-300/15 text-[#6689a5] transition hover:border-cyan-300/35 hover:text-cyan-100"
+          ><Icon name="info" size={10} strokeWidth={2} /></button
+        ></span
       >
       <CustomSelect
         value={instance.minecraftVersion}
@@ -444,6 +445,55 @@
       >{/if}
   </div>
 </div>
+
+{#if versionInfoOpen}<div
+    class="fixed inset-0 z-[70] grid place-items-center bg-[#010612]/85 p-6"
+    role="presentation"
+    onclick={(event) => event.currentTarget === event.target && (versionInfoOpen = false)}
+  >
+    <div
+      class="mc-panel w-full max-w-lg overflow-hidden border-cyan-300/25"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="version-switch-info-title"
+    >
+      <div class="flex items-start gap-4 border-b border-cyan-300/10 bg-[#071a35] px-6 py-5">
+        <span
+          class="grid size-10 shrink-0 place-items-center border border-cyan-300/20 bg-cyan-300/[0.06] text-cyan-200"
+          ><Icon name="info" size={19} strokeWidth={1.8} /></span
+        >
+        <div>
+          <p class="text-[9px] font-bold uppercase tracking-[.16em] text-cyan-300/60">
+            Version switching
+          </p>
+          <h2 id="version-switch-info-title" class="block-title mt-1 text-lg uppercase">
+            Mods for each Minecraft version
+          </h2>
+        </div>
+      </div>
+      <div class="space-y-3 p-6 text-xs leading-6 text-[#8daac1]">
+        <p>
+          Every Minecraft version remembers which personal mods are enabled or disabled and which
+          exact mod version you selected.
+        </p>
+        <p>
+          Switching versions does not delete your configuration. Incompatible mods are marked and
+          can be disabled only for the current Minecraft version without affecting other versions.
+        </p>
+        <p>
+          On the next launch, Ninja Launcher downloads the compatible files and removes managed mod
+          files that are disabled for that version. Modpack-controlled versions remain locked by the
+          pack.
+        </p>
+      </div>
+      <div class="flex justify-end border-t border-cyan-300/10 bg-[#030c1c] px-6 py-4">
+        <button
+          onclick={() => (versionInfoOpen = false)}
+          class="mc-primary px-4 py-2.5 text-xs font-bold">Got it</button
+        >
+      </div>
+    </div>
+  </div>{/if}
 
 <nav class="mb-6 flex border-b border-cyan-200/[0.09]" aria-label="Mod pages">
   <button
@@ -511,46 +561,6 @@
   </div>
 {/if}
 
-{#if view === "installed" && modUpdates.length}
-  <section class="mb-4 border border-emerald-300/25 bg-emerald-400/[0.07]">
-    <div class="flex items-center justify-between gap-4 border-b border-emerald-300/15 px-4 py-3">
-      <div>
-        <p class="text-xs font-bold uppercase tracking-wider text-emerald-100">
-          {modUpdates.length}
-          {modUpdates.length === 1 ? "mod update" : "mod updates"} available
-        </p>
-        <p class="mt-1 text-[11px] text-emerald-200/60">
-          Updates are downloaded and applied the next time this profile is launched.
-        </p>
-      </div>
-      <button
-        onclick={installAllUpdates}
-        disabled={updatingAll || Boolean(busyProjectId)}
-        class="border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-100 hover:bg-emerald-300/20 disabled:opacity-50"
-        >{updatingAll ? "Updating…" : "Update all"}</button
-      >
-    </div>
-    <div class="divide-y divide-emerald-300/10">
-      {#each modUpdates as update}
-        <div class="flex items-center gap-4 px-4 py-3">
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-xs font-bold text-[#d5f7eb]">{update.name}</p>
-            <p class="mt-1 truncate text-[10px] text-[#709c91]">
-              {update.currentName} → {update.latestName}
-            </p>
-          </div>
-          <button
-            onclick={() => installUpdate(update.projectId, update.latestId)}
-            disabled={updatingAll || Boolean(busyProjectId)}
-            class="mc-secondary px-3 py-2 text-[10px] font-bold disabled:opacity-50"
-            >{busyProjectId === update.projectId ? "Updating…" : "Update"}</button
-          >
-        </div>
-      {/each}
-    </div>
-  </section>
-{/if}
-
 {#if view === "installed" && checkingConflicts}
   <div class="mb-4 flex items-center gap-2 text-[10px] uppercase tracking-wider text-[#6689a5]">
     <span class="size-2 animate-pulse bg-cyan-400"></span>Checking dependencies between enabled
@@ -571,12 +581,12 @@
       </div>
       <span
         class="border border-cyan-300/20 bg-cyan-300/[0.07] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-200"
-        >{instance.mods.filter((mod) => mod.enabled).length + packMods.length} active</span
+        >{instance.mods.filter((mod) => modEnabled(mod)).length + packMods.length} active</span
       >
     </div>
     {#if installedMods.length || packMods.length}
       <div
-        class="hidden grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_90px] gap-4 border-b border-white/[0.06] bg-[#041126] px-5 py-2.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#597792] sm:grid"
+        class="hidden grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] gap-4 border-b border-white/[0.06] bg-[#041126] px-5 py-2.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#597792] sm:grid"
       >
         <span>Mod</span><span>Version for Minecraft {instance.minecraftVersion}</span><span
           >Status</span
@@ -585,7 +595,7 @@
       <div class="divide-y divide-white/[0.06]">
         {#each packMods as mod}
           <article
-            class="grid gap-3 bg-violet-400/[0.035] px-5 py-4 transition hover:bg-violet-400/[0.06] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_90px] sm:items-center sm:gap-4"
+            class="grid gap-3 bg-violet-400/[0.035] px-5 py-4 transition hover:bg-violet-400/[0.06] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4"
           >
             <div class="flex min-w-0 items-center gap-3">
               {#if mod.iconUrl}<img
@@ -635,8 +645,10 @@
           {@const project = details[mod.projectId]}
           {@const availableVersions = versionsByProject[mod.projectId]}
           {@const compatibility = compatibilityFor(mod)}
+          {@const enabled = modEnabled(mod)}
+          {@const update = modUpdates.find((item) => item.projectId === mod.projectId)}
           <article
-            class="grid gap-3 px-5 py-4 transition sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_90px] sm:items-center sm:gap-4 {compatibility.state ===
+            class="grid gap-3 px-5 py-4 transition sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4 {compatibility.state ===
             'incompatible'
               ? 'bg-red-500/[0.07] shadow-[inset_3px_0_0_#f87171] hover:bg-red-500/[0.1]'
               : 'hover:bg-cyan-300/[0.035]'}"
@@ -697,24 +709,24 @@
             <div class="min-w-0">
               <button
                 role="switch"
-                aria-checked={mod.enabled}
-                aria-label={`${mod.enabled ? "Disable" : "Enable"} ${mod.name}`}
-                onclick={() => toggleEnabled(mod.projectId, !mod.enabled)}
+                aria-checked={enabled}
+                aria-label={`${enabled ? "Disable" : "Enable"} ${mod.name} for Minecraft ${instance.minecraftVersion}`}
+                onclick={() => toggleEnabled(mod.projectId, !enabled)}
                 disabled={busyProjectId === mod.projectId}
                 class="flex items-center gap-2.5 text-left disabled:cursor-wait disabled:opacity-50"
                 ><span
-                  class="relative h-6 w-10 border rounded-md transition {mod.enabled
+                  class="relative h-6 w-10 border rounded-md transition {enabled
                     ? 'border-emerald-300/40 bg-emerald-400/20'
                     : 'border-white/15 bg-white/[0.04]'}"
                   ><span
-                    class="absolute top-[3px] size-4 transition-all rounded-sm {mod.enabled
+                    class="absolute top-[3px] size-4 transition-all rounded-sm {enabled
                       ? 'left-[18px] bg-emerald-300 shadow-[0_0_7px_#34d399]'
                       : 'left-[3px] bg-[#607286]'}"
                   ></span></span
                 ><span
-                  class="text-[10px] font-bold uppercase tracking-wider {mod.enabled
+                  class="text-[10px] font-bold uppercase tracking-wider {enabled
                     ? 'text-emerald-300'
-                    : 'text-[#718096]'}">{mod.enabled ? "Enabled" : "Disabled"}</span
+                    : 'text-[#718096]'}">{enabled ? "Enabled" : "Disabled"}</span
                 ></button
               >
               <div
@@ -728,12 +740,26 @@
                 <span class="truncate" title={compatibility.message}>{compatibility.message}</span>
               </div>
             </div>
-            <button
-              onclick={() => removeInstalled(mod.projectId)}
-              disabled={busyProjectId === mod.projectId}
-              class="justify-self-start border border-red-300/20 bg-red-400/[0.06] px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-red-200 transition hover:bg-red-400/15 disabled:cursor-wait disabled:opacity-50 sm:justify-self-end"
-              >{busyProjectId === mod.projectId ? "Working…" : "Remove"}</button
-            >
+            <div class="flex justify-self-start gap-1.5 sm:justify-self-end">
+              {#if update}<button
+                  onclick={() => installUpdate(update.projectId, update.latestId)}
+                  disabled={Boolean(busyProjectId)}
+                  title={`Update ${update.currentName} → ${update.latestName} for Minecraft ${instance.minecraftVersion}`}
+                  aria-label={`Update ${mod.name} to ${update.latestName}`}
+                  class="grid size-7 place-items-center border border-emerald-300/15 bg-emerald-300/[0.035] text-[#78a99a] transition hover:border-emerald-300/30 hover:text-emerald-200 disabled:cursor-wait disabled:opacity-40"
+                  ><span class={updatingProjectId === mod.projectId ? "animate-pulse" : ""}
+                    ><Icon name="download" size={11} strokeWidth={2} /></span
+                  ></button
+                >{/if}
+              <button
+                onclick={() => removeInstalled(mod.projectId)}
+                disabled={busyProjectId === mod.projectId}
+                class="border border-red-300/15 bg-red-400/[0.035] px-2.5 py-2 text-[9px] font-bold uppercase tracking-wider text-red-200/70 transition hover:bg-red-400/10 hover:text-red-200 disabled:cursor-wait disabled:opacity-40"
+                >{busyProjectId === mod.projectId && !updatingProjectId
+                  ? "Working…"
+                  : "Remove"}</button
+              >
+            </div>
           </article>
         {/each}
       </div>

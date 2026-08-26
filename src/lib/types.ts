@@ -25,6 +25,8 @@ export interface SelectedMod {
   projectId: string;
   name: string;
   enabled: boolean;
+  disabledVersions?: string[];
+  enabledVersions?: string[];
   versionOverrides: Record<string, string>;
 }
 

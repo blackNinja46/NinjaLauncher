@@ -1,6 +1,6 @@
 use crate::error::CommandError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_MINECRAFT_VERSION: &str = "26.2";
 pub const DEFAULT_FABRIC_VERSION: &str = "0.19.3";
@@ -234,6 +234,23 @@ mod tests {
         .expect("legacy instance");
         assert!(instance.modpack.expect("modpack").pack_mods.is_empty());
     }
+
+    #[test]
+    fn mod_enabled_state_is_scoped_to_minecraft_version() {
+        let mut selected: SelectedMod = serde_json::from_str(
+            r#"{"projectId":"sodium","name":"Sodium","enabled":true,"versionOverrides":{}}"#,
+        )
+        .expect("legacy selected mod");
+        assert!(selected.enabled_for("1.21.11"));
+        assert!(selected.enabled_for("1.21.10"));
+
+        selected.set_enabled_for("1.21.11", false);
+        assert!(!selected.enabled_for("1.21.11"));
+        assert!(selected.enabled_for("1.21.10"));
+
+        selected.set_enabled_for("1.21.11", true);
+        assert!(selected.enabled_for("1.21.11"));
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -280,7 +297,35 @@ pub struct SelectedMod {
     pub name: String,
     pub enabled: bool,
     #[serde(default)]
+    pub disabled_versions: HashSet<String>,
+    #[serde(default)]
+    pub enabled_versions: HashSet<String>,
+    #[serde(default)]
     pub version_overrides: HashMap<String, String>,
+}
+
+impl SelectedMod {
+    pub fn enabled_for(&self, minecraft_version: &str) -> bool {
+        if self.enabled {
+            !self.disabled_versions.contains(minecraft_version)
+        } else {
+            self.enabled_versions.contains(minecraft_version)
+        }
+    }
+
+    pub fn set_enabled_for(&mut self, minecraft_version: &str, enabled: bool) {
+        if self.enabled {
+            if enabled {
+                self.disabled_versions.remove(minecraft_version);
+            } else {
+                self.disabled_versions.insert(minecraft_version.into());
+            }
+        } else if enabled {
+            self.enabled_versions.insert(minecraft_version.into());
+        } else {
+            self.enabled_versions.remove(minecraft_version);
+        }
+    }
 }
 
 impl InstanceConfig {
