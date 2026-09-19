@@ -17,6 +17,7 @@ pub struct LauncherSettings {
     pub theme: Theme,
     pub check_for_updates: bool,
     pub discord_rich_presence: bool,
+    pub share_anonymous_usage_data: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -41,6 +42,7 @@ impl Default for LauncherSettings {
             theme: Theme::Dark,
             check_for_updates: true,
             discord_rich_presence: true,
+            share_anonymous_usage_data: false,
         }
     }
 }
@@ -104,5 +106,6 @@ mod tests {
         assert!(settings.show_logs_on_launch);
         assert!(!settings.show_snapshots);
         assert!(settings.discord_rich_presence);
+        assert!(!settings.share_anonymous_usage_data);
     }
 }

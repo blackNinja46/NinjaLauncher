@@ -5,6 +5,7 @@ import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import type {
   Account,
   AccountState,
+  ClientBootstrap,
   DeviceCode,
   FabricLoaderVersionOption,
   LauncherInstance,
@@ -17,6 +18,9 @@ import type {
   ModrinthProject,
   ModrinthSearchResponse,
   ModrinthVersion,
+  PlayerRanks,
+  ProfileContentFile,
+  ProfileContentKind,
   SupportedVersion,
 } from "$lib/types";
 
@@ -32,6 +36,7 @@ const defaultSettings: LauncherSettings = {
   theme: "dark",
   checkForUpdates: true,
   discordRichPresence: true,
+  shareAnonymousUsageData: false,
 };
 
 function inTauri(): boolean {
@@ -126,9 +131,94 @@ export const duplicateInstance = (id: string) =>
   invoke<LauncherInstance>("duplicate_instance", { id });
 export const deleteInstance = (id: string) => invoke<void>("delete_instance", { id });
 export const openInstanceFolder = (id: string) => invoke<void>("open_instance_folder", { id });
+export const listProfileContent = (instanceId: string, kind: ProfileContentKind) =>
+  inTauri()
+    ? invoke<ProfileContentFile[]>("list_profile_content", { instanceId, kind })
+    : Promise.resolve([]);
+export async function chooseProfileContentFiles(): Promise<string[]> {
+  if (!inTauri()) return [];
+  const paths = await open({
+    multiple: true,
+    directory: false,
+    filters: [{ name: "Minecraft pack", extensions: ["zip"] }],
+  });
+  return paths ? (Array.isArray(paths) ? paths : [paths]) : [];
+}
+export const addProfileContent = (
+  instanceId: string,
+  kind: ProfileContentKind,
+  sourcePath: string,
+) => invoke<ProfileContentFile>("add_profile_content", { instanceId, kind, sourcePath });
+export const removeProfileContent = (
+  instanceId: string,
+  kind: ProfileContentKind,
+  fileName: string,
+) => invoke<void>("remove_profile_content", { instanceId, kind, fileName });
+export const setResourcePackEnabled = (instanceId: string, fileName: string, enabled: boolean) =>
+  invoke<void>("set_resource_pack_enabled", { instanceId, fileName, enabled });
+export const openProfileContentFolder = (instanceId: string, kind: ProfileContentKind) =>
+  invoke<void>("open_profile_content_folder", { instanceId, kind });
+export const searchProfileContent = (
+  query: string,
+  minecraftVersion: string,
+  kind: ProfileContentKind,
+  offset = 0,
+) =>
+  inTauri()
+    ? invoke<ModrinthSearchResponse>("search_profile_content", {
+        query,
+        minecraftVersion,
+        kind,
+        offset,
+      })
+    : Promise.resolve({ hits: [], total_hits: 0 });
+export const listProfileContentVersions = (
+  projectId: string,
+  minecraftVersion: string,
+  kind: ProfileContentKind,
+) =>
+  inTauri()
+    ? invoke<ModrinthVersion[]>("list_profile_content_versions", {
+        projectId,
+        minecraftVersion,
+        kind,
+      })
+    : Promise.resolve([]);
+export const installProfileContent = (
+  instanceId: string,
+  kind: ProfileContentKind,
+  projectId: string,
+  versionId: string | null,
+  name: string,
+  iconUrl: string | null,
+) =>
+  invoke<ProfileContentFile>("install_profile_content", {
+    instanceId,
+    kind,
+    projectId,
+    versionId,
+    name,
+    iconUrl,
+  });
 export const searchMods = (query: string, minecraftVersion: string, loader: string, offset = 0) =>
   inTauri()
     ? invoke<ModrinthSearchResponse>("search_mods", { query, minecraftVersion, loader, offset })
+    : Promise.resolve({ hits: [], total_hits: 0 });
+export type ModrinthSearchIndex = "relevance" | "downloads" | "follows" | "newest" | "updated";
+
+export const searchLauncherContent = (
+  query: string,
+  minecraftVersion: string,
+  offset = 0,
+  index: ModrinthSearchIndex = "relevance",
+) =>
+  inTauri()
+    ? invoke<ModrinthSearchResponse>("search_launcher_content", {
+        query,
+        minecraftVersion,
+        offset,
+        index,
+      })
     : Promise.resolve({ hits: [], total_hits: 0 });
 export const getModDetails = (projectIds: string[]) =>
   inTauri() ? invoke<ModrinthProject[]>("get_mod_details", { projectIds }) : Promise.resolve([]);
@@ -233,6 +323,8 @@ export const getAccounts = () =>
   inTauri()
     ? invoke<AccountState>("get_accounts")
     : Promise.resolve({ accounts: [], activeUuid: null });
+export const getAccountCape = (uuid: string) =>
+  inTauri() ? invoke<string | null>("get_account_cape", { uuid }) : Promise.resolve(null);
 export const beginMicrosoftLogin = () => invoke<DeviceCode>("begin_microsoft_login");
 export const completeMicrosoftLogin = (deviceCode: DeviceCode) =>
   invoke<Account>("complete_microsoft_login", { deviceCode });
@@ -245,6 +337,25 @@ export const launchGame = (instanceId: string, demo = false, serverAddress?: str
   invoke<void>("launch_game", { instanceId, demo, serverAddress: serverAddress ?? null });
 export const getServerIcon = (serverAddress: string) =>
   inTauri() ? invoke<string | null>("get_server_icon", { serverAddress }) : Promise.resolve(null);
+export const getNetworkRanks = (uuid: string): Promise<PlayerRanks | null> =>
+  inTauri()
+    ? invoke("get_network_ranks", { uuid })
+    : Promise.resolve({
+        uuid,
+        username: "PreviewPlayer",
+        primaryGroup: "ninja-plus",
+        ranks: [
+          {
+            name: "ninja-plus",
+            displayName: "Ninja+",
+            prefix: "[Ninja+]",
+            icon: "ninja",
+            color: "#3b9df5",
+            weight: 50,
+            primary: true,
+          },
+        ],
+      });
 export const listRunningInstances = () =>
   inTauri() ? invoke<string[]>("list_running_instances") : Promise.resolve([]);
 export const stopGame = (instanceId: string) => invoke<void>("stop_game", { instanceId });
@@ -267,6 +378,46 @@ export async function getLauncherOverview(): Promise<LauncherOverview> {
   }
   return invoke<LauncherOverview>("get_launcher_overview");
 }
+
+export async function getLauncherBootstrap(minecraftVersion?: string): Promise<ClientBootstrap> {
+  if (!inTauri()) {
+    return {
+      generatedAt: new Date(0).toISOString(),
+      configuration: {
+        maintenanceEnabled: false,
+        maintenanceActive: false,
+        maintenanceMessage: "",
+        maintenanceStartsAt: null,
+        maintenanceEndsAt: null,
+        registrationEnabled: true,
+        recommendedMinecraftVersion: null,
+        minimumSupportedLauncherVersion: null,
+        latestLauncherVersion: null,
+        launcherHomeAnnouncementsEnabled: true,
+        launcherNotificationsEnabled: true,
+        enabledFeatures: [],
+        updatedAt: new Date(0).toISOString(),
+      },
+      announcements: [],
+      minecraftVersions: [],
+      latestRelease: null,
+    };
+  }
+  return invoke<ClientBootstrap>("get_launcher_bootstrap", {
+    minecraftVersion: minecraftVersion ?? null,
+  });
+}
+
+export const recordClientEvent = (
+  eventType: "LAUNCHER_START" | "GAME_START",
+  minecraftVersion?: string,
+) =>
+  inTauri()
+    ? invoke<void>("record_client_event", {
+        eventType,
+        minecraftVersion: minecraftVersion ?? null,
+      })
+    : Promise.resolve();
 
 export function messageFromError(error: unknown): string {
   if (typeof error === "string") return error;

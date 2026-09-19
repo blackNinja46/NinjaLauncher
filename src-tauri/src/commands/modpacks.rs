@@ -766,6 +766,8 @@ fn collect_export_files(
                 || relative == Path::new("instance.json")
                 || relative == Path::new("instance.json.tmp")
                 || relative == Path::new("mods/.ninjalauncher-managed.json")
+                || relative == Path::new("resourcepacks/.ninjalauncher-managed.json")
+                || relative == Path::new("shaderpacks/.ninjalauncher-managed.json")
             {
                 continue;
             }
@@ -1137,6 +1139,8 @@ fn safe_relative_path(value: &str) -> Result<PathBuf, CommandError> {
 fn reject_reserved_path(relative: &Path) -> Result<(), CommandError> {
     if relative == Path::new("instance.json")
         || relative == Path::new("mods/.ninjalauncher-managed.json")
+        || relative == Path::new("resourcepacks/.ninjalauncher-managed.json")
+        || relative == Path::new("shaderpacks/.ninjalauncher-managed.json")
     {
         return Err(CommandError::new(format!(
             "The modpack attempted to replace a launcher file: {}",

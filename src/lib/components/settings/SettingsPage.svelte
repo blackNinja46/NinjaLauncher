@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
   import SettingRow from "./SettingRow.svelte";
-  import Toggle from "./Toggle.svelte";
+  import Toggle from "$lib/components/ui/Toggle.svelte";
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import type { LauncherOverview, LauncherSettings } from "$lib/types";
   import {
@@ -139,11 +139,7 @@
         title="Microsoft sign-in"
         description="Uses Ninja Launcher's built-in public OAuth application."
       >
-        <span
-          class="border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs font-bold text-emerald-200"
-        >
-          Built in
-        </span>
+        <span class=" px-3 py-2 text-xs font-bold text-emerald-200"> Built in </span>
       </SettingRow>
       <SettingRow
         title="Check for updates"
@@ -156,6 +152,15 @@
         description="Show when you are using Ninja Launcher or playing Minecraft on your Discord profile."
       >
         <Toggle bind:checked={settings.discordRichPresence} label="Discord Rich Presence" />
+      </SettingRow>
+      <SettingRow
+        title="Anonymous usage data"
+        description="Share launcher starts, game starts, versions, and operating system. No account or device identifier is sent."
+      >
+        <Toggle
+          bind:checked={settings.shareAnonymousUsageData}
+          label="Share anonymous usage data"
+        />
       </SettingRow>
       <SettingRow
         title="Launcher logs"

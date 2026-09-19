@@ -55,6 +55,28 @@ pub async fn search_mods(
 }
 
 #[tauri::command]
+pub async fn search_launcher_content(
+    query: String,
+    minecraft_version: String,
+    offset: u32,
+    index: Option<String>,
+    client: State<'_, ModrinthClient>,
+) -> Result<SearchResponse, CommandError> {
+    let index = index.unwrap_or_else(|| "relevance".to_string());
+    if !matches!(
+        index.as_str(),
+        "relevance" | "downloads" | "follows" | "newest" | "updated"
+    ) {
+        return Err(CommandError::new(
+            "The selected Modrinth sorting method is invalid.",
+        ));
+    }
+    client
+        .search_launcher_content(query.trim(), &minecraft_version, offset.min(10_000), &index)
+        .await
+}
+
+#[tauri::command]
 pub async fn get_mod_details(
     project_ids: Vec<String>,
     client: State<'_, ModrinthClient>,

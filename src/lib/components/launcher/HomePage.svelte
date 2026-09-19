@@ -1,44 +1,64 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getServerIcon } from "$lib/api/tauri";
-  import Icon from "$lib/components/ui/Icon.svelte";
+  import RankBadge from "$lib/components/account/RankBadge.svelte";
+  import PlayerSkin from "$lib/components/account/PlayerSkin.svelte";
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
-  import PageHeader from "$lib/components/layout/PageHeader.svelte";
-  import type { LauncherInstance, SupportedVersion } from "$lib/types";
+  import Icon from "$lib/components/ui/Icon.svelte";
+  import type { Account, LauncherInstance, PlayerRanks, SupportedVersion } from "$lib/types";
+
   let {
     instance,
+    instances,
     versions,
     signedIn,
+    account,
+    networkRanks,
     launching,
     running,
     stopping,
     progress,
     status,
+    maintenanceActive,
+    maintenanceMessage,
     onplay,
     onconnect,
     onstop,
     onopenmods,
     onversionchange,
+    onprofilechange,
   }: {
     instance: LauncherInstance;
+    instances: LauncherInstance[];
     versions: SupportedVersion[];
     signedIn: boolean;
+    account: Account | null;
+    networkRanks: PlayerRanks | null;
     launching: boolean;
     running: boolean;
     stopping: boolean;
     progress: number | null;
     status: string;
+    maintenanceActive: boolean;
+    maintenanceMessage: string;
     onplay: () => Promise<void>;
     onconnect: (serverAddress: string) => Promise<void>;
     onstop: () => Promise<void>;
     onopenmods: () => void;
     onversionchange: (version: string) => Promise<void>;
+    onprofilechange: (id: string) => void;
   } = $props();
+
+  let profileMenu: HTMLDivElement;
+  let profileMenuOpen = $state(false);
   const featuredServers = [
     { name: "blackNinja.Live", address: "blackninja.live" },
     { name: "NinjaSMP.net", address: "ninjasmp.net" },
   ];
   let serverIcons = $state<Record<string, string>>({});
+  let primaryRank = $derived(
+    networkRanks?.ranks.find((rank) => rank.primary) ?? networkRanks?.ranks[0] ?? null,
+  );
 
   onMount(() => {
     for (const server of featuredServers) {
@@ -49,168 +69,387 @@
         .catch(() => {});
     }
   });
+
+  function selectProfile(id: string) {
+    onprofilechange(id);
+    profileMenuOpen = false;
+  }
+
+  $effect(() => {
+    if (!profileMenuOpen) return;
+    const closeMenu = (event: PointerEvent) => {
+      if (!profileMenu?.contains(event.target as Node)) profileMenuOpen = false;
+    };
+    const closeWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") profileMenuOpen = false;
+    };
+    document.addEventListener("pointerdown", closeMenu);
+    document.addEventListener("keydown", closeWithKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      document.removeEventListener("keydown", closeWithKeyboard);
+    };
+  });
 </script>
 
-<PageHeader title="Ready to build?" description="Choose your world, gear up, and jump in." />
-<section class="mc-panel overflow-hidden">
-  <div class="relative min-h-[320px] overflow-hidden border-b border-cyan-300/[0.12] p-8">
-    <div class="voxel-pattern absolute inset-0 opacity-90"></div>
-    <div class="absolute -right-20 -top-24 size-80 rounded-full bg-cyan-400/[0.08] blur-3xl"></div>
-    <div class="relative max-w-[650px]">
-      <img
-        src="/brand/ninja-launcher-wordmark.png"
-        alt="Ninja Launcher"
-        class="mb-8 h-auto w-[570px] max-w-full drop-shadow-[0_10px_18px_rgba(0,5,35,.55)]"
-      />
-      <div
-        class="mb-4 inline-flex items-center gap-2 border border-cyan-300/[0.18] bg-blue-950/55 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.16em] text-cyan-100/70"
-      >
-        <span class="size-2 bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>Selected profile
-      </div>
-      <h2 class="block-title text-[28px] uppercase text-white">{instance.name}</h2>
-      <div class="mt-4 flex items-center gap-2.5">
-        <span class="text-[10px] font-semibold uppercase tracking-wider text-[#71849b]"
-          >Version</span
+<section class="group">
+  <div class="relative h-[clamp(480px,calc(100vh-136px),574px)] px-5 sm:px-7">
+    <div class="relative flex h-full flex-col items-center">
+      {#if maintenanceActive}
+        <div
+          class="absolute left-1/2 top-2 z-50 w-[min(92%,560px)] -translate-x-1/2 border border-amber-300/30 bg-amber-400/10 px-4 py-3 text-center shadow-[0_12px_36px_rgba(0,0,0,.35)] backdrop-blur-xl"
+          role="alert"
         >
-        <CustomSelect
-          value={instance.minecraftVersion}
-          options={versions.map((version) => ({
-            value: version.minecraftVersion,
-            label: `${version.minecraftVersion}${version.versionType === "snapshot" ? " · Snapshot" : ""}`,
-          }))}
-          onchange={(value) => onversionchange(String(value))}
-          disabled={launching || running || Boolean(instance.modpack)}
-          ariaLabel="Minecraft version"
-          class="min-w-34 text-xs font-bold text-blue-50"
-        />
-        <span class="mc-field px-3 py-2 text-xs text-[#9bc9ed]"
-          >Fabric {instance.loaderVersion}</span
-        >
-      </div>
-      <div class="mt-7 flex items-center gap-3">
-        {#if running}<button
-            onclick={onstop}
-            disabled={stopping}
-            class="flex min-w-[190px] items-center justify-center gap-2 border border-red-300/35 bg-red-500/20 px-8 py-3.5 text-sm font-extrabold text-red-100 hover:bg-red-500/30 disabled:opacity-60"
-            ><span class="size-3 bg-current"></span>{stopping ? "STOPPING…" : "STOP"}</button
-          >{:else}<button
-            onclick={onplay}
-            disabled={launching}
-            class="mc-primary flex min-w-[190px] items-center justify-center gap-2 px-8 py-3.5 text-sm font-extrabold disabled:opacity-70"
-            ><Icon name="play" size={17} />{launching
-              ? "PREPARING…"
-              : signedIn
-                ? "PLAY"
-                : "PLAY DEMO"}</button
-          >{/if}
-        <button
-          onclick={onopenmods}
-          class="mc-secondary px-5 py-3.5 text-sm font-bold text-[#ccecff]">Manage mods</button
-        >
-      </div>
-      {#if progress !== null}<div class="mt-5 max-w-lg" aria-live="polite">
-          <div
-            class="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-[.11em]"
-          >
-            <span class={launching ? "text-cyan-200" : "text-emerald-300"}>{status}</span>
-            <span class="font-mono text-[#89b7d4]">{progress}%</span>
-          </div>
-          <div
-            class="h-2 overflow-hidden border border-cyan-300/20 bg-[#020a1a] p-px"
-            role="progressbar"
-            aria-label="Minecraft launch progress"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={progress}
-          >
-            <div
-              class="relative h-full overflow-hidden transition-[width,background-color] duration-500 ease-out {progress ===
-              100
-                ? 'bg-emerald-400'
-                : 'bg-cyan-400'}"
-              style={`width: ${progress}%`}
-            >
-              {#if launching}<span
-                  class="absolute inset-y-0 right-0 w-12 animate-pulse bg-gradient-to-r from-transparent to-white/45"
-                ></span>{/if}
-            </div>
-          </div>
-        </div>{/if}
-      {#if instance.modpack}<p class="mt-3 text-[11px] text-violet-200/70">
-          Modrinth pack · {instance.modpack.name} · {instance.modpack.fileCount} managed files
-        </p>{/if}
-      {#if !signedIn}<p class="mt-3 text-[11px] text-[#8094ad]">
-          Demo mode · Local test worlds only · Online multiplayer unavailable
-        </p>{/if}
-    </div>
-  </div>
-  <div class="grid grid-cols-3 divide-x divide-cyan-300/[0.1] bg-[#051126]/70">
-    <div class="p-5">
-      <div class="text-[10px] font-semibold uppercase tracking-wider text-[#6f7480]">Minecraft</div>
-      <div class="mt-1.5 text-sm font-medium">{instance.minecraftVersion}</div>
-    </div>
-    <div class="p-5">
-      <div class="text-[10px] font-semibold uppercase tracking-wider text-[#6f7480]">
-        Mod loader
-      </div>
-      <div class="mt-1.5 flex items-center gap-2 text-sm font-medium">
-        <span class="size-2 rounded-sm bg-[#d8a33c]"></span>Fabric
-      </div>
-    </div>
-    <div class="p-5">
-      <div class="text-[10px] font-semibold uppercase tracking-wider text-[#6f7480]">
-        Enabled mods
-      </div>
-      <div class="mt-1.5 text-sm font-medium">
-        {instance.modpack
-          ? `${instance.modpack.fileCount} pack files`
-          : `${
-              instance.mods.filter((mod) =>
-                mod.enabled
-                  ? !mod.disabledVersions?.includes(instance.minecraftVersion)
-                  : mod.enabledVersions?.includes(instance.minecraftVersion),
-              ).length
-            } mods`}
-      </div>
-    </div>
-  </div>
-</section>
-<section class="mt-4 border border-white/[0.055] bg-[#031027]/45 px-4 py-3">
-  <div class="mb-2.5 flex items-center justify-between">
-    <p class="text-[9px] font-bold uppercase tracking-[.14em] text-[#58748d]">Featured servers</p>
-    {#if !signedIn}<span class="text-[9px] text-[#695f63]">Sign in for multiplayer</span>{/if}
-  </div>
-  <div class="grid gap-2 sm:grid-cols-2">
-    {#each featuredServers as server}
-      <article
-        class="flex items-center gap-3 border border-white/[0.045] bg-black/10 px-3 py-2.5 transition hover:border-cyan-300/10 hover:bg-cyan-300/[0.025]"
-      >
-        {#if serverIcons[server.address]}<img
-            src={serverIcons[server.address]}
-            alt={`${server.name} server icon`}
-            class="size-8 shrink-0 border border-white/10 bg-[#031237] object-cover opacity-80 [image-rendering:pixelated]"
-          />{:else}<div
-            class="grid size-8 shrink-0 place-items-center border border-white/[0.08] bg-white/[0.025] text-xs font-bold uppercase text-[#71879b]"
-          >
-            {server.name.slice(0, 1)}
-          </div>{/if}
-        <div class="min-w-0 flex-1">
-          <h3 class="truncate text-xs font-semibold text-[#a9bfd2]">{server.name}</h3>
-          <p class="mt-0.5 truncate font-mono text-[9px] text-[#4d687f]">{server.address}</p>
+          <p class="text-[9px] font-bold uppercase tracking-[.16em] text-amber-200">Maintenance</p>
+          <p class="mt-1 text-xs text-amber-50/80">
+            {maintenanceMessage || "The launcher is temporarily unavailable."}
+          </p>
         </div>
-        <button
-          onclick={() => onconnect(server.address)}
-          disabled={launching || running || !signedIn}
-          title={signedIn ? `Connect to ${server.name}` : "Sign in to use multiplayer"}
-          class="flex items-center gap-1.5 border border-cyan-300/10 bg-cyan-300/[0.035] px-2.5 py-1.5 text-[9px] font-bold text-[#789bb5] transition hover:border-cyan-300/25 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-35"
-          ><Icon name="play" size={10} />Connect</button
+      {/if}
+      <div
+        class="pointer-events-none absolute left-1/2 top-10 z-30 flex -translate-x-1/2 flex-col items-center gap-1"
+      >
+        {#if primaryRank}<RankBadge rank={primaryRank} compact />{/if}
+        <h1
+          class="whitespace-nowrap text-[26px] font-extrabold tracking-[-.035em] text-white drop-shadow-[0_3px_12px_rgba(0,0,0,.65)]"
         >
-      </article>
-    {/each}
+          {account?.username ?? "Guest"}
+        </h1>
+      </div>
+
+      <div class="min-h-0 w-[clamp(420px,52%,560px)] flex-1 translate-y-3 pt-20">
+        <PlayerSkin {account} {launching} rank={primaryRank} showNameTag={false} />
+      </div>
+
+      <aside
+        class="absolute right-0 top-1/2 z-30 flex -translate-y-1/2 flex-col gap-2.5"
+        aria-label="Featured servers"
+      >
+        {#each featuredServers as server}
+          <button
+            type="button"
+            onclick={() => onconnect(server.address)}
+            disabled={launching || running || !signedIn || maintenanceActive}
+            aria-label={`Connect to ${server.name}`}
+            title={signedIn ? `Connect to ${server.name}` : "Sign in to use multiplayer"}
+            class="server-logo grid size-12 place-items-center overflow-hidden rounded-[6px] border border-white/[.14] bg-[var(--color-surface-strong)] shadow-[0_10px_28px_rgba(0,4,18,.32)] backdrop-blur-xl disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {#if serverIcons[server.address]}
+              <img
+                src={serverIcons[server.address]}
+                alt=""
+                class="size-full object-cover [image-rendering:pixelated]"
+              />
+            {:else}
+              <Icon name="server" size={18} />
+            {/if}
+          </button>
+        {/each}
+      </aside>
+
+      <div bind:this={profileMenu} class="relative z-40 w-72 shrink-0 -translate-y-8 pb-2">
+        <div
+          class="play-split {launching
+            ? 'is-launching'
+            : running
+              ? 'is-running'
+              : 'is-ready'} flex overflow-hidden rounded-[7px] border border-cyan-100/65 text-lg font-bold text-white shadow-[0_10px_28px_var(--color-brand-glow)]"
+        >
+          {#if running}
+            <button
+              onclick={onstop}
+              disabled={stopping}
+              class="flex min-w-0 flex-1 items-center justify-center gap-2 bg-red-500/35 px-6 py-3.5 text-sm font-bold"
+            >
+              <span class="size-2.5 bg-current"></span>{stopping ? "Stopping…" : "Stop game"}
+            </button>
+          {:else}
+            <button
+              onclick={onplay}
+              disabled={launching || maintenanceActive}
+              class="launch-main flex min-w-0 flex-1 items-center justify-center gap-2 px-6 py-3"
+            >
+              <span class="launch-glyph {launching ? 'is-loading' : ''}">
+                <Icon name="play" size={15} />
+              </span>{maintenanceActive
+                ? "Maintenance"
+                : launching
+                  ? "Preparing…"
+                  : signedIn
+                    ? "Play"
+                    : "Play demo"}
+            </button>
+          {/if}
+
+          <button
+            type="button"
+            onclick={() => (profileMenuOpen = !profileMenuOpen)}
+            disabled={launching || running}
+            class="grid w-14 shrink-0 place-items-center border-l border-white/35 bg-black/10 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45"
+            aria-label="Choose profile"
+            aria-haspopup="listbox"
+            aria-expanded={profileMenuOpen}
+            title="Choose profile"
+          >
+            <span
+              class={"transition-transform duration-200 " + (profileMenuOpen ? "rotate-180" : "")}
+            >
+              <Icon name="chevron-down" size={12} />
+            </span>
+          </button>
+        </div>
+
+        {#if profileMenuOpen}
+          <div
+            class="profile-menu absolute bottom-[calc(100%+.5rem)] right-0 z-50 max-h-52 w-72 overflow-y-auto border border-accent-400/25 bg-[var(--color-surface-strong)] p-1.5 shadow-[0_22px_60px_rgba(0,4,18,.75)] backdrop-blur-3xl"
+            role="listbox"
+            aria-label="Launcher profiles"
+          >
+            {#each instances as profile (profile.id)}
+              <button
+                type="button"
+                role="option"
+                aria-selected={profile.id === instance.id}
+                onclick={() => selectProfile(profile.id)}
+                class="flex w-full items-center gap-3 border px-3 py-2 text-left transition-colors {profile.id ===
+                instance.id
+                  ? 'border-accent-400/25 bg-accent-500/15 text-white'
+                  : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white/[.06] hover:text-white'}"
+              >
+                <span
+                  class="grid size-7 shrink-0 place-items-center bg-white/[.05] text-accent-400"
+                >
+                  <Icon name={profile.id === instance.id ? "check" : "instances"} size={11} />
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[10px] font-bold">{profile.name}</span>
+                  <span class="block text-[8px] text-white/40"
+                    >Minecraft {profile.minecraftVersion}</span
+                  >
+                </span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="mt-2.5" aria-live="polite">
+          {#if progress !== null}
+            <div
+              class="mb-1 flex items-center justify-between text-[14px] font-semibold text-white/65"
+            >
+              <span class="max-w-48 truncate">{status}</span>
+              <span class="font-mono">{progress}%</span>
+            </div>
+            <div
+              class="h-2 overflow-hidden rounded-full border border-white/10 bg-black/30 p-px"
+              role="progressbar"
+              aria-label="Minecraft launch progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={progress}
+            >
+              <div
+                class="h-full rounded-full bg-gradient-to-r from-accent-600 via-accent-500 to-accent-400 transition-[width] duration-700 ease-out"
+                style={"width: " + progress + "%"}
+              ></div>
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mc-panel grid grid-cols-3 divide-x divide-white/[0.07] overflow-visible">
+    <div class="flex min-w-0 items-center justify-center gap-3 px-5 py-4">
+      <span class="grid size-8 shrink-0 place-items-center text-accent-400">
+        <Icon name="instances" size={22} />
+      </span>
+      <div class="min-w-0">
+        <div class="text-[8px] font-bold uppercase tracking-[.14em] text-[var(--color-brand-sky)]">
+          Selected profile
+        </div>
+        <h2 class="mt-1 truncate text-sm font-bold text-[var(--color-text-primary)]">
+          {instance.name}
+        </h2>
+        <p class="mt-0.5 truncate text-[9px] text-[var(--color-text-muted)]">
+          Minecraft {instance.minecraftVersion}{instance.modpack
+            ? " · " + instance.modpack.name
+            : ""}
+        </p>
+      </div>
+    </div>
+
+    <div class="flex items-center px-5 py-4">
+      <CustomSelect
+        value={instance.minecraftVersion}
+        options={versions.map((version) => ({
+          value: version.minecraftVersion,
+          label:
+            version.minecraftVersion + (version.versionType === "snapshot" ? " · Snapshot" : ""),
+        }))}
+        onchange={(value) => onversionchange(String(value))}
+        disabled={launching || running || Boolean(instance.modpack)}
+        ariaLabel="Minecraft version"
+        displayLabel="Change version"
+        class="h-10 w-full text-[11px] font-bold text-white"
+      />
+    </div>
+
+    <div class="grid place-items-center px-5 py-4">
+      <button
+        onclick={onopenmods}
+        class="mc-secondary flex h-10 w-full items-center justify-center gap-2 px-4 text-[11px] font-semibold text-white/80"
+        ><Icon name="mods" size={12} />Manage mods</button
+      >
+    </div>
   </div>
 </section>
-<div class="mc-panel mt-4 flex items-center gap-2 px-4 py-3 text-xs text-[#86a8c7]">
-  <span class="grid size-5 place-items-center bg-emerald-400/10 text-emerald-400"
-    ><Icon name="check" size={12} strokeWidth={2.5} /></span
-  >{status}<span class="ml-auto text-[#4f718f]">Last checked just now</span>
-</div>
+
+<style>
+  .play-split {
+    position: relative;
+    isolation: isolate;
+    background: var(--gradient-brand);
+    background-size: 160% 160%;
+    transition:
+      transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 220ms ease,
+      filter 220ms ease;
+  }
+
+  .play-split::before {
+    position: absolute;
+    z-index: 2;
+    inset: 0;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(
+      105deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.08) 42%,
+      rgba(255, 255, 255, 0.42) 50%,
+      rgba(255, 255, 255, 0.08) 58%,
+      transparent 70%
+    );
+    transform: translateX(-125%);
+  }
+
+  .play-split.is-ready {
+    animation: launch-idle 4.5s ease-in-out infinite;
+  }
+
+  .play-split.is-ready::before {
+    animation: launch-shine 4.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  }
+
+  .play-split.is-launching {
+    animation: launch-working 1.1s ease-in-out infinite;
+  }
+
+  .play-split.is-launching::before {
+    animation: launch-shine 1.15s linear infinite;
+  }
+
+  .play-split.is-ready:hover {
+    transform: translateY(-2px) scale(1.012);
+    box-shadow:
+      0 14px 34px var(--color-brand-glow),
+      0 0 0 1px rgb(59 157 245 / 0.16);
+    filter: brightness(1.07);
+  }
+
+  .play-split > button {
+    position: relative;
+    z-index: 3;
+  }
+
+  .launch-glyph {
+    display: inline-grid;
+    place-items: center;
+    transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .launch-main:hover:not(:disabled) .launch-glyph {
+    transform: translateX(3px) scale(1.08);
+  }
+
+  .launch-glyph.is-loading {
+    animation: launch-glyph-loading 850ms ease-in-out infinite;
+  }
+
+  .play-split button:hover:not(:disabled),
+  .profile-menu button:hover:not(:disabled) {
+    transform: none;
+  }
+
+  .profile-menu {
+    animation: profile-menu-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-brand) transparent;
+  }
+
+  .server-logo:hover:not(:disabled) {
+    border-color: var(--color-border-brand);
+    background: var(--color-surface-hover);
+    transform: translateX(-3px) scale(1.04);
+  }
+
+  @keyframes profile-menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(5px) scale(0.98);
+    }
+  }
+
+  @keyframes launch-shine {
+    0%,
+    62% {
+      transform: translateX(-125%);
+    }
+    100% {
+      transform: translateX(125%);
+    }
+  }
+
+  @keyframes launch-idle {
+    0%,
+    100% {
+      background-position: 0% 50%;
+      box-shadow: 0 10px 28px var(--color-brand-glow);
+    }
+    50% {
+      background-position: 100% 50%;
+      box-shadow: 0 12px 34px rgb(59 157 245 / 0.3);
+    }
+  }
+
+  @keyframes launch-working {
+    0%,
+    100% {
+      filter: brightness(0.96);
+    }
+    50% {
+      filter: brightness(1.12);
+    }
+  }
+
+  @keyframes launch-glyph-loading {
+    0%,
+    100% {
+      transform: translateX(-2px);
+      opacity: 0.65;
+    }
+    50% {
+      transform: translateX(3px);
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .play-split,
+    .play-split::before,
+    .launch-glyph {
+      animation: none;
+    }
+  }
+</style>

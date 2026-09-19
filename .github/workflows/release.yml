@@ -43,7 +43,7 @@ jobs:
       - name: Verify project
         run: bun run check
 
-      - uses: tauri-apps/tauri-action@v1
+      - uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -53,5 +53,5 @@ jobs:
           releaseName: Ninja Launcher v__VERSION__
           releaseBody: Download the installer for your platform. Existing installations update automatically.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

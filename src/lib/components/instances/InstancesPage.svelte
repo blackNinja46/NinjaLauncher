@@ -275,7 +275,7 @@
     ><Icon name="plus" size={15} />New profile</button
   >
 </div>
-{#if error}<div class="mb-4 rounded-lg bg-red-400/10 px-4 py-3 text-xs text-red-300">
+{#if error}<div class="error-banner mb-4 px-4 py-3 text-xs">
     {error}
   </div>{/if}
 {#if exportNotice}<div
@@ -285,12 +285,12 @@
   </div>{/if}
 <div class="space-y-3">
   {#if installation}<article
-      class="mc-panel relative overflow-hidden border-violet-300/35 bg-violet-400/[.07] p-5"
+      class="mc-panel relative overflow-hidden border-cyan-300/35 p-5"
       aria-live="polite"
     >
       <div class="flex items-center gap-3">
         <div
-          class="grid size-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-[#031237] ring-1 ring-violet-300/30"
+          class="grid size-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-[#031237] ring-1 ring-cyan-300/30"
         >
           {#if installation.iconUrl}<img
               src={installation.iconUrl}
@@ -306,7 +306,7 @@
           <div class="flex items-center gap-2">
             <h2 class="block-title truncate text-[15px] uppercase">{installation.name}</h2>
             <span
-              class="border border-violet-300/25 bg-violet-400/10 px-2 py-.5 text-[9px] font-bold text-violet-200"
+              class="inline-flex rounded-sm items-center gap-1 bg-purple-400/10 px-2 py-0.5 text-[11px] uppercase font-bold text-purple-300"
               >MODPACK</span
             >
           </div>
@@ -317,7 +317,7 @@
           </p>
         </div>
         {#if installation.phase === "installing"}<div
-            class="size-6 animate-spin rounded-full border-2 border-white/10 border-t-violet-300"
+            class="size-6 animate-spin rounded-full border-2 border-white/10 border-t-cyan-300"
             aria-label="Installation in progress"
           ></div>{:else}<span
             class="text-lg font-bold text-red-300"
@@ -326,19 +326,19 @@
       </div>
     </article>{/if}
   {#each instances as instance}<article
-      class="mc-panel relative overflow-hidden p-5 transition duration-200 {selectedId ===
+      class="mc-panel relative overflow-hidden p-5 transition duration-200  {selectedId ===
       instance.id
-        ? 'border-cyan-300/70 bg-gradient-to-r from-cyan-400/[.16] via-blue-500/[.09] to-[#051227]/95 shadow-[inset_5px_0_0_#19d8f1,inset_0_1px_0_rgba(133,235,255,.2),0_0_28px_rgba(9,159,240,.16)]'
+        ? 'border-cyan-300/70 bg-white/[.055] shadow-[inset_4px_0_0_#3b9df5,0_12px_28px_rgba(0,0,0,.18)]'
         : 'hover:border-cyan-300/30 hover:bg-blue-500/[.04]'}"
     >
       {#if selectedId === instance.id}<div
-          class="pointer-events-none absolute inset-y-0 left-0 w-1 bg-cyan-300 shadow-[0_0_14px_#19d8f1]"
+          class="pointer-events-none absolute inset-y-0 left-0 w-1 bg-cyan-300 shadow-[0_0_12px_rgba(59,157,245,.34)]"
         ></div>{/if}
       <div class="flex items-center gap-2">
         <div
           class="grid size-14 place-items-center overflow-hidden rounded-lg border border-cyan-300/15 bg-[#07335d] transition {selectedId ===
           instance.id
-            ? 'ring-1 ring-cyan-300/55 shadow-[0_0_18px_rgba(25,216,241,.25)]'
+            ? 'ring-1 ring-cyan-300/55 border-[var(--color-border-brand)] shadow-[inset_0_0_28px_var(--color-brand-soft)]'
             : ''}"
         >
           {#if instance.modpack?.iconUrl}<img
@@ -355,18 +355,18 @@
           onclick={() => onselect(instance.id)}
           aria-pressed={selectedId === instance.id}
           class="flex-1 text-left"
-          ><div class="flex items-center gap-2">
+          ><div class="inline justify-center gap-2">
             <h2 class="block-title text-[15px] uppercase">{instance.name}</h2>
             {#if selectedId === instance.id}<span
-                class="inline-flex items-center gap-1 border border-cyan-300/35 bg-cyan-300/15 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[.1em] text-cyan-100 shadow-[0_0_12px_rgba(25,216,241,.12)]"
-                ><Icon name="check" size={10} strokeWidth={2.8} />Active profile</span
+                class="inline-flex items-center rounded-sm gap-1 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-bold uppercase text-cyan-600"
+                >Active profile</span
               >{/if}
             {#if runningIds.includes(instance.id)}<span
-                class="inline-flex items-center gap-1 border border-emerald-300/25 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-200"
-                ><span class="size-1.5 bg-emerald-300"></span>Running</span
+                class="inline-flex items-center rounded-sm gap-1 bg-emerald-300/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-emerald-400"
+                ><span class="size-1.5 bg-emerald-300 text-center"></span>Running</span
               >{/if}
             {#if instance.modpack}<span
-                class="border border-violet-300/20 bg-violet-400/10 px-2 py-.5 text-[9px] font-bold text-violet-200"
+                class="inline-flex rounded-sm items-center gap-1 bg-purple-400/10 px-2 py-0.5 text-[11px] uppercase font-bold text-purple-300"
                 >MODPACK</span
               >{/if}
           </div>
@@ -437,9 +437,7 @@
         Profile settings
       </p>
       <h2 id="edit-profile-title" class="block-title mt-1 text-lg uppercase">Edit profile</h2>
-      {#if editError}<div
-          class="mt-4 border border-red-400/25 bg-red-400/[0.08] px-3 py-2.5 text-xs text-red-200"
-        >
+      {#if editError}<div class="error-banner mt-4 px-3 py-2.5 text-xs">
           {editError}
         </div>{/if}
       <div class="mt-5 space-y-4">
@@ -483,7 +481,7 @@
           />
         </label>
         {#if editing.modpack}<p
-            class="border border-violet-300/15 bg-violet-400/[0.06] px-3 py-2.5 text-[10px] leading-5 text-violet-200/70"
+            class="border border-cyan-300/15 bg-cyan-300/[0.06] px-3 py-2.5 text-[10px] leading-5 text-cyan-200/70"
           >
             Minecraft and Fabric versions are controlled by {editing.modpack.name}. The profile name
             can still be changed.
@@ -518,9 +516,7 @@
         Export {pendingExport.name}
       </h2>
 
-      {#if exportError}<div
-          class="mt-4 border border-red-400/25 bg-red-400/[0.08] px-3 py-2.5 text-xs text-red-200"
-        >
+      {#if exportError}<div class="error-banner mt-4 px-3 py-2.5 text-xs">
           {exportError}
         </div>{/if}
 
@@ -618,9 +614,7 @@
 {#if creating}<div class="fixed inset-0 z-40 grid place-items-center bg-[#010612]/80">
     <div class="mc-panel w-full max-w-md p-6">
       <h2 class="block-title text-lg uppercase">Create profile</h2>
-      {#if createError}<div
-          class="mt-4 border border-red-400/25 bg-red-400/[0.08] px-3 py-2.5 text-xs text-red-200"
-        >
+      {#if createError}<div class="error-banner mt-4 px-3 py-2.5 text-xs">
           {createError}
         </div>{/if}
       <div class="mt-5 space-y-3">

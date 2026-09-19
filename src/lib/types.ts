@@ -1,4 +1,5 @@
-export type NavigationItem = "home" | "mods" | "modpacks" | "instances" | "logs" | "settings";
+export type NavigationItem =
+  "home" | "skins" | "mods" | "modpacks" | "instances" | "logs" | "settings";
 export type Theme = "dark" | "light" | "system";
 
 export interface LauncherSettings {
@@ -13,12 +14,55 @@ export interface LauncherSettings {
   theme: Theme;
   checkForUpdates: boolean;
   discordRichPresence: boolean;
+  shareAnonymousUsageData: boolean;
 }
 
 export interface LauncherOverview {
   appDataDirectory: string;
   instanceCount: number;
   version: string;
+}
+
+export interface RemoteLauncherConfiguration {
+  maintenanceEnabled: boolean;
+  maintenanceActive: boolean;
+  maintenanceMessage: string;
+  maintenanceStartsAt: string | null;
+  maintenanceEndsAt: string | null;
+  registrationEnabled: boolean;
+  recommendedMinecraftVersion: string | null;
+  minimumSupportedLauncherVersion: string | null;
+  latestLauncherVersion: string | null;
+  launcherHomeAnnouncementsEnabled: boolean;
+  launcherNotificationsEnabled: boolean;
+  enabledFeatures: string[];
+  updatedAt: string;
+}
+
+export interface ClientAnnouncement {
+  id: string;
+  title: string;
+  message: string;
+  type: "INFO" | "UPDATE" | "MAINTENANCE" | "WARNING";
+  priority: "LOW" | "NORMAL" | "HIGH" | "CRITICAL";
+  startsAt: string | null;
+  endsAt: string | null;
+  displayTypes: ("HOME_NEWS" | "NOTIFICATION" | "BANNER" | "MODAL" | "CRITICAL_ALERT")[];
+}
+
+export interface ClientMinecraftVersion {
+  version: string;
+  recommended: boolean;
+  releaseType: "RELEASE" | "SNAPSHOT";
+  loaders: { type: "FABRIC" | "NEOFORGE" | "FORGE" | "VANILLA"; version: string }[];
+}
+
+export interface ClientBootstrap {
+  generatedAt: string;
+  configuration: RemoteLauncherConfiguration;
+  announcements: ClientAnnouncement[];
+  minecraftVersions: ClientMinecraftVersion[];
+  latestRelease: { version: string; buildNumber: number; mandatory: boolean } | null;
 }
 
 export interface SelectedMod {
@@ -38,6 +82,19 @@ export interface LauncherInstance {
   loaderVersion: string;
   mods: SelectedMod[];
   modpack?: InstalledModpack;
+}
+
+export type ProfileContentKind = "resourcepacks" | "shaderpacks";
+
+export interface ProfileContentFile {
+  name: string;
+  fileName: string;
+  sizeBytes: number | null;
+  directory: boolean;
+  projectId: string | null;
+  versionId: string | null;
+  iconUrl: string | null;
+  enabled: boolean | null;
 }
 
 export interface InstalledModpack {
@@ -94,6 +151,7 @@ export interface FabricLoaderVersionOption {
 
 export interface ModrinthHit {
   projectId: string;
+  projectType: "mod" | "resourcepack" | "shader";
   slug: string;
   title: string;
   description: string;
@@ -135,6 +193,21 @@ export interface Account {
 export interface AccountState {
   accounts: Account[];
   activeUuid: string | null;
+}
+export interface NetworkRank {
+  name: string;
+  displayName: string;
+  prefix: string;
+  icon: string | null;
+  color: string | null;
+  weight: number;
+  primary: boolean;
+}
+export interface PlayerRanks {
+  uuid: string;
+  username: string | null;
+  primaryGroup: string;
+  ranks: NetworkRank[];
 }
 export interface DeviceCode {
   device_code: string;

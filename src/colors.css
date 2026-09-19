@@ -1,0 +1,75 @@
+:root {
+  color-scheme: dark;
+
+  /* One brand accent, derived from the launcher logo. */
+  --color-primary: #3b9df5;
+
+  /* Compatibility aliases deliberately resolve to that single accent. */
+  --color-brand-cyan: var(--color-primary);
+  --color-brand-sky: var(--color-primary);
+  --color-brand-blue: var(--color-primary);
+  --color-brand-deep: var(--color-primary);
+  --color-brand-navy: var(--color-primary);
+
+  /* Neutral palette — nearly achromatic like the OneLauncher reference. */
+  --color-navy-1000: #090a0d;
+  --color-navy-950: #0c0e12;
+  --color-navy-900: #101218;
+  --color-navy-850: #13161d;
+  --color-navy-800: #171b23;
+  --color-navy-700: #202631;
+  --color-navy-600: #2b3340;
+
+  /* Semantic backgrounds and glass surfaces. */
+  --color-bg-canvas: var(--color-navy-950);
+  --color-bg-deep: var(--color-navy-1000);
+  --color-section-background: rgba(17, 20, 27, 0.92);
+  --color-surface-glass: var(--color-section-background);
+  --color-surface-strong: rgba(13, 15, 20, 0.94);
+  --color-surface-field: rgba(13, 15, 20, 0.72);
+  --color-surface-field-hover: rgba(24, 28, 36, 0.92);
+  --color-surface-subtle: rgba(255, 255, 255, 0.065);
+  --color-surface-hover: rgba(255, 255, 255, 0.105);
+  --color-surface-selected: rgba(255, 255, 255, 0.12);
+  --color-overlay: rgba(7, 8, 11, 0.92);
+
+  /* Semantic borders and highlights. */
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-default: rgba(255, 255, 255, 0.13);
+  --color-border-strong: rgba(255, 255, 255, 0.18);
+  --color-border-brand: rgb(59 157 245 / 0.4);
+  --color-highlight-subtle: rgba(255, 255, 255, 0.07);
+  --color-highlight-default: rgba(255, 255, 255, 0.16);
+
+  /* Text hierarchy. */
+  --color-text-primary: #f4f5f7;
+  --color-text-secondary: #b7bac2;
+  --color-text-muted: #858a94;
+  --color-text-faint: #646a74;
+  --color-text-on-brand: #ffffff;
+
+  /* Feedback and Minecraft-specific accents. */
+  --color-success: #34d399;
+  --color-warning: #f4c150;
+  --color-danger: #f87171;
+  --color-danger-text: #fecdd3;
+  /* Reusable effects. */
+  --color-brand-soft: rgba(59, 157, 245, 0.1);
+  --color-brand-selection: rgb(59 157 245 / 0.3);
+  --color-brand-glow: rgba(59, 157, 245, 0.22);
+  --color-cyan-glow: rgba(59, 157, 245, 0.14);
+  --color-shadow: rgba(0, 0, 0, 0.34);
+  --gradient-brand: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-primary) 88%, white) 0%,
+    var(--color-primary) 100%
+  );
+
+  /* Compatibility aliases for components that are migrated incrementally. */
+  --glass: var(--color-surface-glass);
+  --glass-strong: var(--color-surface-strong);
+  --glass-border: var(--color-border-default);
+  --glass-highlight: var(--color-highlight-default);
+  --brand-blue: var(--color-brand-blue);
+  --brand-cyan: var(--color-brand-cyan);
+}

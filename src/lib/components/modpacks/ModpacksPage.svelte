@@ -183,7 +183,7 @@
 </form>
 
 {#if error}
-  <div class="mb-5 border border-red-400/25 bg-red-400/[0.08] px-4 py-3 text-xs text-red-200">
+  <div class="error-banner mb-5 px-4 py-3 text-xs">
     {error}
   </div>
 {/if}

@@ -1,4 +1,5 @@
 use crate::storage::paths::PathManager;
+use crate::{control_api, control_api::ClientBootstrap};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -45,4 +46,19 @@ pub fn get_launcher_overview(paths: State<'_, PathManager>) -> LauncherOverview 
         instance_count,
         version: env!("CARGO_PKG_VERSION"),
     }
+}
+
+#[tauri::command]
+pub async fn get_launcher_bootstrap(
+    minecraft_version: Option<String>,
+) -> Result<ClientBootstrap, crate::error::CommandError> {
+    control_api::fetch_launcher_bootstrap(minecraft_version.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn record_client_event(
+    event_type: String,
+    minecraft_version: Option<String>,
+) -> Result<(), crate::error::CommandError> {
+    control_api::record_event(&event_type, minecraft_version.as_deref()).await
 }

@@ -123,6 +123,8 @@ pub struct AssetIndex {
 #[derive(Debug, Deserialize)]
 pub struct AssetObject {
     pub hash: String,
+    #[serde(default)]
+    pub size: u64,
 }
 
 pub fn applies(rules: &[Rule]) -> bool {

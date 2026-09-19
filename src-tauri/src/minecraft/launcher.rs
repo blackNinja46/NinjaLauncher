@@ -76,6 +76,10 @@ pub async fn launch(
         ));
     }
     let instance = instance_manager::load(paths, instance_id)?;
+    crate::commands::instances::sync_resource_pack_selection(&instance_manager::instance_dir(
+        paths,
+        instance_id,
+    )?)?;
     let mut account = if demo {
         microsoft::Account::demo()
     } else {
@@ -129,11 +133,7 @@ pub async fn launch(
     )
     .await?;
 
-    emit(
-        &app,
-        "downloads",
-        "Downloading Minecraft libraries and assets",
-    );
+    emit(&app, "downloads", "Checking Minecraft libraries and assets");
     let prepared = prepare_game(
         paths,
         &client,
@@ -303,12 +303,20 @@ async fn prepare_game(
                 ));
             }
             let prefix = &object.hash[..2];
+            let path = assets_root.join("objects").join(prefix).join(&object.hash);
+            if object.size > 0
+                && tokio::fs::metadata(&path)
+                    .await
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() == object.size)
+            {
+                continue;
+            }
             asset_downloads.push(DownloadSpec {
                 url: format!(
                     "https://resources.download.minecraft.net/{prefix}/{}",
                     object.hash
                 ),
-                path: assets_root.join("objects").join(prefix).join(&object.hash),
+                path,
                 sha1: Some(object.hash),
                 sha256: None,
                 sha512: None,
