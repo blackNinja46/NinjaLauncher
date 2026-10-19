@@ -4,16 +4,23 @@
   import { listen } from "@tauri-apps/api/event";
   import Sidebar from "$lib/components/layout/Sidebar.svelte";
   import NotificationCenter from "$lib/components/layout/NotificationCenter.svelte";
+  import AnnouncementBanner from "$lib/components/layout/AnnouncementBanner.svelte";
   import ToastStack from "$lib/components/layout/ToastStack.svelte";
   import WindowTitlebar from "$lib/components/layout/WindowTitlebar.svelte";
   import SkinsPage from "$lib/components/skins/SkinsPage.svelte";
   import HomePage from "$lib/components/launcher/HomePage.svelte";
+  import HalloweenIdleSounds from "$lib/components/launcher/HalloweenIdleSounds.svelte";
+  import HalloweenIntroDialog from "$lib/components/launcher/HalloweenIntroDialog.svelte";
   import ModsPage from "$lib/components/mods/ModsPage.svelte";
   import ModpacksPage from "$lib/components/modpacks/ModpacksPage.svelte";
   import InstancesPage from "$lib/components/instances/InstancesPage.svelte";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import LogsPage from "$lib/components/logs/LogsPage.svelte";
+  import CrashDialog from "$lib/components/logs/CrashDialog.svelte";
   import AccountDialog from "$lib/components/account/AccountDialog.svelte";
+  import SetupWizard from "$lib/components/setup/SetupWizard.svelte";
+  import Icon from "$lib/components/ui/Icon.svelte";
+  import { compareMinecraftVersionsDescending, sortSupportedVersions } from "$lib/utils/version";
   import {
     getAccounts,
     getLauncherOverview,
@@ -21,26 +28,33 @@
     getLauncherBootstrap,
     getSettings,
     installAvailableUpdate,
+    importModpackFile,
     installModpack,
     launchGame,
     listInstances,
     listRunningInstances,
     listSupportedVersions,
+    listVanillaVersions,
     messageFromError,
     repairModConfiguration,
     recordClientEvent,
     saveInstance,
     stopGame,
+    uploadCrashReport,
     type AppUpdateProgress,
   } from "$lib/api/tauri";
   import type {
     Account,
     ClientBootstrap,
+    ClientAnnouncement,
+    GameCrashDetails,
     GameLogEntry,
+    InstanceConsole,
     LauncherInstance,
     LauncherOverview,
     LauncherSettings,
     ModpackInstallation,
+    ModpackFileInspection,
     ModrinthHit,
     NavigationItem,
     PlayerRanks,
@@ -51,6 +65,9 @@
   let loading = $state(true);
   let startupError = $state("");
   let settings = $state<LauncherSettings>({
+    setupComplete: false,
+    installationPath: null,
+    termsAcceptedAt: null,
     allocatedMemoryMb: 4096,
     javaPath: null,
     downloadConcurrency: 4,
@@ -60,6 +77,10 @@
     showSnapshots: false,
     language: "en",
     theme: "dark",
+    animationsEnabled: true,
+    parallaxEnabled: true,
+    halloweenThemeEnabled: true,
+    halloweenSoundsEnabled: true,
     checkForUpdates: true,
     discordRichPresence: true,
     shareAnonymousUsageData: false,
@@ -76,27 +97,50 @@
   let networkRanks = $state<PlayerRanks | null>(null);
   let networkRankError = $state("");
   let clientBootstrap = $state<ClientBootstrap | null>(null);
+  let halloweenThemeAvailable = $derived(
+    clientBootstrap?.configuration.enabledFeatures.includes("halloween_theme") ?? false,
+  );
+  let halloweenThemeActive = $derived(halloweenThemeAvailable && settings.halloweenThemeEnabled);
+  const halloweenIntroStorageKey = "ninja-launcher:halloween-event:2026:intro-seen";
+  let halloweenIntroOpen = $state(false);
+  let halloweenIntroChecked = $state(false);
   let dismissedAnnouncementIds = $state<string[]>([]);
   let controlServiceError = $state("");
   let clientRefreshInFlight = false;
   let accountOpen = $state(false);
   let allVersions = $state<SupportedVersion[]>([]);
+  let vanillaVersions = $state<SupportedVersion[]>([]);
   let managedVersions = $derived.by(() => {
     const catalog = clientBootstrap?.minecraftVersions ?? [];
-    if (!catalog.length) return allVersions;
-    const mapped = catalog.flatMap((version) => {
-      const fabric = version.loaders.find((loader) => loader.type === "FABRIC");
-      if (!fabric) return [];
-      return [
-        {
-          minecraftVersion: version.version,
-          fabricLoaderVersion: fabric.version,
-          versionType:
-            version.releaseType === "SNAPSHOT" ? ("snapshot" as const) : ("release" as const),
-        },
-      ];
-    });
-    return mapped.length ? mapped : allVersions;
+    if (!catalog.length) return sortSupportedVersions(allVersions);
+    const managed = [...catalog]
+      .sort((left, right) => compareMinecraftVersionsDescending(left.version, right.version))
+      .flatMap((version) => {
+        const fabric = version.loaders.find((loader) => loader.type === "FABRIC");
+        if (!fabric) return [];
+        return [
+          {
+            minecraftVersion: version.version,
+            fabricLoaderVersion: fabric.version,
+            versionType:
+              version.releaseType === "SNAPSHOT" ? ("snapshot" as const) : ("release" as const),
+          },
+        ];
+      });
+    return managed.length ? sortSupportedVersions(managed) : sortSupportedVersions(allVersions);
+  });
+  let managedVanillaVersions = $derived.by(() => {
+    const catalog = clientBootstrap?.minecraftVersions ?? [];
+    if (!catalog.length) return sortSupportedVersions(vanillaVersions);
+    const managed = [...catalog]
+      .sort((left, right) => compareMinecraftVersionsDescending(left.version, right.version))
+      .map((version) => ({
+        minecraftVersion: version.version,
+        fabricLoaderVersion: "",
+        versionType:
+          version.releaseType === "SNAPSHOT" ? ("snapshot" as const) : ("release" as const),
+      }));
+    return managed.length ? sortSupportedVersions(managed) : sortSupportedVersions(vanillaVersions);
   });
   let versions = $derived(
     managedVersions.filter(
@@ -104,9 +148,11 @@
     ),
   );
   let gameLogs = $state<GameLogEntry[]>([]);
+  let selectedConsoleId = $state("");
   let runningInstanceIds = $state<string[]>([]);
   let launchingInstanceIds = $state<string[]>([]);
   let stoppingInstanceIds = $state<string[]>([]);
+  const requestedStopInstanceIds = new Set<string>();
   let launcherStatus = $state("Everything is ready");
   let launchProgress = $state<number | null>(null);
   let modpackInstallation = $state<ModpackInstallation | null>(null);
@@ -119,7 +165,10 @@
   let minecraftClientStarted = $state(false);
   let fabricRepairing = $state(false);
   let fabricRepairNotice = $state("");
+  let fabricCrashReportId = $state("");
+  let crashDetails = $state<GameCrashDetails | null>(null);
   let showCustomTitlebar = $state(false);
+  let launcherAssembly = $state(false);
   let toastItems = $state<
     {
       id: string;
@@ -128,12 +177,96 @@
       tone: "info" | "success" | "warning" | "error";
     }[]
   >([]);
+
+  $effect(() => {
+    const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const resolvedTheme =
+      settings.theme === "system" ? (systemDark ? "dark" : "light") : settings.theme;
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.classList.toggle("animations-disabled", !settings.animationsEnabled);
+    document.documentElement.classList.toggle("parallax-disabled", !settings.parallaxEnabled);
+    document.documentElement.classList.toggle("halloween-theme", halloweenThemeActive);
+  });
+
+  $effect(() => {
+    if (loading || !settings.setupComplete || !halloweenThemeAvailable || halloweenIntroChecked)
+      return;
+    halloweenIntroChecked = true;
+    halloweenIntroOpen = localStorage.getItem(halloweenIntroStorageKey) !== "seen";
+  });
+
+  function dismissHalloweenIntro(openSettings = false) {
+    localStorage.setItem(halloweenIntroStorageKey, "seen");
+    halloweenIntroOpen = false;
+    if (openSettings) activePage = "settings";
+  }
   let visibleSystemNotificationIds: string[] = [];
   let mainElement = $state<HTMLElement>();
   let instance = $derived(instances.find((item) => item.id === selectedId) ?? instances[0]);
+  let fabricCrashDetails = $derived.by((): GameCrashDetails | null => {
+    if (!instance || !fabricIssue) return null;
+    const lines = fabricIssue
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return {
+      reportId: fabricCrashReportId || "fabric-compatibility",
+      instanceId: instance.id,
+      profileName: instance.name,
+      minecraftVersion: instance.minecraftVersion,
+      exitCode: null,
+      title: "Incompatible Fabric mods",
+      message:
+        "Fabric stopped Minecraft because one or more installed mods cannot be resolved together.",
+      suggestion:
+        "Automatic repair first restores compatible automatic versions. It only disables a personal mod when Fabric identifies exactly one unambiguous cause.",
+      technicalDetail: fabricIssue,
+      logExcerpt: lines.slice(-40).map((line) => `[fabric] ${line}`),
+      uploadLogExcerpt: lines.slice(-200).map((line) => `[fabric] ${line}`),
+      repairAvailable: !gameRunning && !launching,
+    };
+  });
+  let selectedVersions = $derived(
+    instance?.loader === "vanilla"
+      ? managedVanillaVersions.filter(
+          (version) => settings.showSnapshots || version.versionType !== "snapshot",
+        )
+      : versions,
+  );
+  let selectedManagedVersions = $derived(
+    instance?.loader === "vanilla" ? managedVanillaVersions : managedVersions,
+  );
+  let currentVersionAvailable = $derived(
+    !instance ||
+      selectedManagedVersions.some(
+        (version) => version.minecraftVersion === instance.minecraftVersion,
+      ),
+  );
   let gameRunning = $derived(Boolean(instance && runningInstanceIds.includes(instance.id)));
   let launching = $derived(Boolean(instance && launchingInstanceIds.includes(instance.id)));
   let stopping = $derived(Boolean(instance && stoppingInstanceIds.includes(instance.id)));
+  let runningInstances = $derived(instances.filter((item) => runningInstanceIds.includes(item.id)));
+  let instanceConsoles = $derived.by((): InstanceConsole[] => {
+    const availableIds = new Set([
+      ...runningInstanceIds,
+      ...gameLogs.map((entry) => entry.instanceId),
+    ]);
+    return instances
+      .filter((item) => availableIds.has(item.id))
+      .sort(
+        (left, right) =>
+          Number(runningInstanceIds.includes(right.id)) -
+          Number(runningInstanceIds.includes(left.id)),
+      )
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        minecraftVersion: item.minecraftVersion,
+        loader: item.loader,
+        logs: gameLogs.filter((entry) => entry.instanceId === item.id),
+        running: runningInstanceIds.includes(item.id),
+      }));
+  });
   let updatePercent = $derived(
     appUpdate?.totalBytes && appUpdate.downloadedBytes
       ? Math.min(100, Math.round((appUpdate.downloadedBytes / appUpdate.totalBytes) * 100))
@@ -177,7 +310,7 @@
         announcement.displayTypes.includes("HOME_NEWS");
       const notificationVisible =
         configuration?.launcherNotificationsEnabled &&
-        announcement.displayTypes.some((type) => type !== "HOME_NEWS");
+        announcement.displayTypes.some((type) => type !== "HOME_NEWS" && type !== "BANNER");
       if (!homeVisible && !notificationVisible) continue;
       items.push({
         id: `announcement:${announcement.id}`,
@@ -207,6 +340,14 @@
       });
     }
     return items;
+  });
+  let bannerAnnouncements = $derived.by((): ClientAnnouncement[] => {
+    if (!clientBootstrap?.configuration.launcherNotificationsEnabled) return [];
+    return clientBootstrap.announcements.filter(
+      (announcement) =>
+        announcement.displayTypes.includes("BANNER") &&
+        !dismissedAnnouncementIds.includes(announcement.id),
+    );
   });
 
   function showToast(notification: {
@@ -245,6 +386,13 @@
     requestAnimationFrame(() => {
       if (mainElement) mainElement.scrollTop = 0;
     });
+  });
+
+  $effect(() => {
+    const consoleIds = instanceConsoles.map((item) => item.id);
+    if (!consoleIds.includes(selectedConsoleId)) {
+      selectedConsoleId = consoleIds.includes(selectedId) ? selectedId : (consoleIds[0] ?? "");
+    }
   });
 
   $effect(() => {
@@ -315,12 +463,18 @@
   function openNotification(id: string) {
     if (id !== "fabric" || !fabricIssueCandidate) return;
     fabricIssue = fabricIssueCandidate;
+    fabricCrashReportId = crypto.randomUUID();
     fabricDialogOpen = true;
   }
 
   async function refreshInstances() {
     instances = await listInstances();
     if (!instances.some((item) => item.id === selectedId)) selectedId = instances[0]?.id ?? "";
+  }
+
+  async function refreshAfterSetup() {
+    await refreshInstances();
+    overview = await getLauncherOverview();
   }
 
   async function refreshClientBootstrap() {
@@ -359,10 +513,174 @@
   function finalizeFabricFailure() {
     if (gameProcessExited && fabricIssueCandidate && !minecraftClientStarted) {
       fabricIssue = fabricIssueCandidate;
+      fabricCrashReportId = crypto.randomUUID();
       fabricDialogOpen = true;
     } else if (gameProcessExited && minecraftClientStarted) {
       fabricIssueCandidate = "";
     }
+  }
+
+  function createCrashDetails(
+    instanceId: string,
+    exitCode: number | null,
+    entries: GameLogEntry[],
+  ): GameCrashDetails {
+    const crashedProfile = instances.find((item) => item.id === instanceId);
+    const output = entries.map((entry) => entry.line).join("\n");
+    const technicalDetail =
+      [...entries]
+        .reverse()
+        .find((entry) =>
+          /exception|error|fatal|caused by|outofmemory|unsatisfiedlink|unsupportedclassversion|mixin|glfw/i.test(
+            entry.line,
+          ),
+        )?.line ?? null;
+    let title = "Minecraft crashed";
+    let message = "Minecraft closed unexpectedly before it could shut down normally.";
+    let suggestion =
+      "Open the console to review the final messages. If the crash repeats, check this profile's mods and Java runtime.";
+
+    if (/outofmemoryerror|could not reserve enough space|gc overhead limit/i.test(output)) {
+      title = "Not enough memory";
+      message = "Minecraft ran out of usable memory and had to close.";
+      suggestion =
+        "Increase the allocated memory in Settings or remove memory-heavy mods, shaders, and resource packs.";
+    } else if (
+      /incompatible mods?|modresolutionexception|mod resolution|mixin.*(?:failed|error)|could not execute entrypoint|nosuchmethoderror/i.test(
+        output,
+      )
+    ) {
+      title = "Mod compatibility problem";
+      message = "One or more mods are incompatible with this Minecraft version or with each other.";
+      suggestion =
+        "Open the console to identify the affected mod, then update, disable, or remove it from this profile.";
+    } else if (
+      /unsatisfiedlinkerror|wrong architecture|bad cpu type|no lwjgl|failed to load.*(?:dylib|dll|so)|unsupportedclassversionerror/i.test(
+        output,
+      )
+    ) {
+      title = "Java or native runtime problem";
+      message =
+        "Minecraft could not load the Java or graphics components required by this version.";
+      suggestion =
+        "Use Automatic Java in Settings and launch the profile again. Older versions on Apple Silicon may require Rosetta 2.";
+    } else if (
+      /glfw error|failed to create window|opengl.*(?:error|failed)|pixel format|renderer.*failed/i.test(
+        output,
+      )
+    ) {
+      title = "Graphics initialization failed";
+      message = "Minecraft could not initialize its game window or graphics backend.";
+      suggestion =
+        "Disable shaders and try the profile without graphics-related mods. Also check that the system graphics software is current.";
+    }
+
+    return {
+      reportId: crypto.randomUUID(),
+      instanceId,
+      profileName: crashedProfile?.name ?? "Minecraft",
+      minecraftVersion: crashedProfile?.minecraftVersion ?? "Unknown",
+      exitCode,
+      title,
+      message,
+      suggestion,
+      technicalDetail,
+      logExcerpt: entries
+        .filter((entry) => entry.line.trim())
+        .slice(-40)
+        .map((entry) => `[${entry.stream}] ${entry.line}`),
+      uploadLogExcerpt: entries
+        .filter((entry) => entry.line.trim())
+        .slice(-200)
+        .map((entry) => `[${entry.stream}] ${entry.line}`),
+    };
+  }
+
+  function createLaunchFailureDetails(instanceId: string, detail: string): GameCrashDetails {
+    const failedProfile = instances.find((item) => item.id === instanceId);
+    const javaProblem = /java|runtime|jdk|jre|architecture|rosetta/i.test(detail);
+    const incompatibleModId = detail.match(
+      /No compatible version was found for mod ([A-Za-z0-9_-]+)/i,
+    )?.[1];
+    const incompatibleMod = incompatibleModId
+      ? failedProfile?.mods.find((item) => item.projectId === incompatibleModId)
+      : null;
+    const loaderName = failedProfile?.loader === "fabric" ? "Fabric" : failedProfile?.loader;
+    const compatibilityProblem = Boolean(incompatibleModId);
+    return {
+      reportId: crypto.randomUUID(),
+      instanceId,
+      profileName: failedProfile?.name ?? "Minecraft",
+      minecraftVersion: failedProfile?.minecraftVersion ?? "Unknown",
+      exitCode: null,
+      title: compatibilityProblem ? "Incompatible mod" : "Minecraft could not start",
+      message: compatibilityProblem
+        ? `${incompatibleMod?.name ?? incompatibleModId} is not available for Minecraft ${failedProfile?.minecraftVersion ?? "this version"}${loaderName ? ` with ${loaderName}` : ""}, so Minecraft was not started.`
+        : "The launcher could not complete the startup process for this profile.",
+      suggestion: compatibilityProblem
+        ? "Repair the profile to disable the incompatible mod for this Minecraft version, then launch again. The mod will not be deleted."
+        : javaProblem
+          ? "Set Java Runtime to Automatic in Settings and try again. Older versions on Apple Silicon may require Rosetta 2."
+          : "Open the console for the full error, then verify this profile's version, loader, and installed content.",
+      technicalDetail: detail,
+      logExcerpt: [`[launcher] ${detail}`],
+      uploadLogExcerpt: [`[launcher] ${detail}`],
+      repairAvailable: compatibilityProblem && failedProfile?.loader === "fabric",
+    };
+  }
+
+  async function repairLaunchProfile(instanceId: string) {
+    try {
+      const report = await repairModConfiguration(instanceId);
+      await refreshInstances();
+      const disabled = report.disabledMods.length
+        ? ` Disabled for this version: ${report.disabledMods.join(", ")}.`
+        : "";
+      crashDetails = null;
+      showToast({
+        title:
+          report.resetVersions === 0 && report.disabledMods.length === 0
+            ? "Profile already compatible"
+            : "Profile repaired",
+        message:
+          report.resetVersions === 0 && report.disabledMods.length === 0
+            ? "No changes were required. You can launch the profile again."
+            : `${report.resetVersions} pinned mod version(s) reset.${disabled} You can launch the profile again.`,
+        tone: "success",
+      });
+    } catch (cause) {
+      showToast({
+        title: "Profile repair failed",
+        message: messageFromError(cause),
+        tone: "error",
+      });
+      throw cause;
+    }
+  }
+
+  async function uploadCrashToDashboard(crash: GameCrashDetails) {
+    const crashedInstance = instances.find((item) => item.id === crash.instanceId);
+    if (!crashedInstance) throw new Error("The crashed profile could not be found.");
+    await uploadCrashReport({
+      clientReportId: crash.reportId,
+      profileId: crash.instanceId,
+      profileName: crash.profileName,
+      minecraftVersion: crash.minecraftVersion,
+      loader: crashedInstance.loader,
+      accountUuid: account?.uuid ?? null,
+      accountName: account?.username ?? null,
+      exitCode: crash.exitCode,
+      title: crash.title,
+      message: crash.message,
+      suggestion: crash.suggestion,
+      technicalDetail: crash.technicalDetail,
+      logExcerpt: crash.uploadLogExcerpt ?? crash.logExcerpt,
+    });
+    showToast({
+      title: "Crash report uploaded",
+      message: "The report is now available in the Ninja Launcher dashboard.",
+      tone: "success",
+    });
   }
 
   async function repairFabric() {
@@ -375,25 +693,30 @@
       const disabled = report.disabledMods.length
         ? ` Disabled: ${report.disabledMods.join(", ")}.`
         : "";
-      fabricRepairNotice = `Fabric configuration repaired. ${report.resetVersions} pinned mod version(s) reset.${disabled} Start the profile again to apply the repair.`;
+      fabricRepairNotice =
+        report.resetVersions === 0 && report.disabledMods.length === 0
+          ? "The Fabric configuration is already compatible. Start the profile again."
+          : `Fabric configuration repaired. ${report.resetVersions} pinned mod version(s) reset.${disabled} Start the profile again to apply the repair.`;
       fabricIssue = "";
       fabricIssueCandidate = "";
       fabricDialogOpen = false;
     } catch (cause) {
       fabricIssue = messageFromError(cause);
+      throw cause;
     } finally {
       fabricRepairing = false;
     }
   }
   async function changeVersion(minecraftVersion: string) {
     if (!instance) return;
-    const supported = versions.find((item) => item.minecraftVersion === minecraftVersion);
+    const supported = selectedVersions.find((item) => item.minecraftVersion === minecraftVersion);
     if (!supported) return;
     try {
       await saveInstance({
         ...instance,
         minecraftVersion,
-        loaderVersion: supported.fabricLoaderVersion,
+        loaderVersion:
+          instance.loader === "fabric" ? supported.fabricLoaderVersion : instance.loaderVersion,
       });
       await refreshInstances();
       showToast({
@@ -420,6 +743,7 @@
       projectId: pack.projectId,
       name: pack.title,
       iconUrl: pack.iconUrl,
+      source: "modrinth",
       phase: "installing",
     };
     modpackInstallation = pending;
@@ -437,6 +761,50 @@
     }
   }
 
+  async function importSelectedModpackFile(
+    inspection: ModpackFileInspection,
+    allowForeignMods: boolean,
+  ): Promise<LauncherInstance> {
+    if (modpackInstallation?.phase === "installing") {
+      throw new Error("Another modpack installation is already running.");
+    }
+    const pending: ModpackInstallation = {
+      projectId: `file:${inspection.path}`,
+      name: inspection.name,
+      iconUrl: null,
+      source: "file",
+      phase: "installing",
+    };
+    modpackInstallation = pending;
+    try {
+      const created = await importModpackFile(inspection.path, allowForeignMods);
+      await refreshInstances();
+      selectedId = created.id;
+      modpackInstallation = { ...pending, phase: "complete" };
+      showToast({
+        title: "Modpack imported",
+        message: `${inspection.name} is ready as a new profile.`,
+        tone: "success",
+      });
+      window.setTimeout(() => {
+        if (
+          modpackInstallation?.projectId === pending.projectId &&
+          modpackInstallation.phase === "complete"
+        ) {
+          modpackInstallation = null;
+        }
+      }, 3_000);
+      return created;
+    } catch (cause) {
+      modpackInstallation = {
+        ...pending,
+        phase: "failed",
+        error: messageFromError(cause),
+      };
+      throw cause;
+    }
+  }
+
   async function play(serverAddress?: string) {
     if (!instance || launching || gameRunning) return;
     if (clientBootstrap?.configuration.maintenanceActive) {
@@ -449,10 +817,20 @@
       });
       return;
     }
+    if (!currentVersionAvailable) {
+      showToast({
+        title: "Version unavailable",
+        message: `Minecraft ${instance.minecraftVersion} is no longer enabled in the Ninja Launcher dashboard. Choose another version before launching.`,
+        tone: "warning",
+      });
+      return;
+    }
     const launchingId = instance.id;
+    requestedStopInstanceIds.delete(launchingId);
     fabricIssue = "";
     fabricIssueCandidate = "";
     fabricDialogOpen = false;
+    crashDetails = null;
     gameProcessExited = false;
     minecraftClientStarted = false;
     fabricRepairNotice = "";
@@ -473,25 +851,47 @@
     } catch (error) {
       launchingInstanceIds = launchingInstanceIds.filter((id) => id !== launchingId);
       launchProgress = null;
-      launcherStatus = messageFromError(error);
+      const message = messageFromError(error);
+      launcherStatus = message;
+      selectedConsoleId = launchingId;
+      gameLogs = [
+        ...gameLogs.filter((entry) => entry.instanceId !== launchingId),
+        {
+          instanceId: launchingId,
+          stream: "stderr",
+          line: `[Ninja Launcher] Launch failed: ${message}`,
+        },
+      ];
+      crashDetails = createLaunchFailureDetails(launchingId, message);
+      showToast({ title: "Minecraft could not start", message, tone: "error" });
+      if (settings.showLogsOnLaunch) activePage = "logs";
     }
   }
 
-  async function stopSelectedGame() {
-    if (!instance || stopping) return;
-    const stoppingId = instance.id;
+  async function stopInstance(instanceId: string) {
+    if (stoppingInstanceIds.includes(instanceId)) return;
+    const target = instances.find((item) => item.id === instanceId);
+    const targetName = target?.name ?? "Minecraft";
+    const stoppingId = instanceId;
+    requestedStopInstanceIds.add(stoppingId);
     stoppingInstanceIds = [...stoppingInstanceIds, stoppingId];
-    launcherStatus = `Stopping ${instance.name}…`;
+    launcherStatus = `Stopping ${targetName}…`;
     try {
       await stopGame(stoppingId);
       runningInstanceIds = runningInstanceIds.filter((id) => id !== stoppingId);
-      launcherStatus = `${instance.name} stopped`;
+      launcherStatus = `${targetName} stopped`;
     } catch (cause) {
+      requestedStopInstanceIds.delete(stoppingId);
       launcherStatus = messageFromError(cause);
       runningInstanceIds = await listRunningInstances();
     } finally {
       stoppingInstanceIds = stoppingInstanceIds.filter((id) => id !== stoppingId);
     }
+  }
+
+  async function stopSelectedGame() {
+    if (!instance) return;
+    await stopInstance(instance.id);
   }
 
   function dismissStartScreen() {
@@ -512,8 +912,14 @@
       showCustomTitlebar = true;
       Promise.all([
         listen<GameLogEntry>("launcher://log", (event) => {
-          gameLogs = [...gameLogs.slice(-1999), event.payload];
-          collectFabricIssue(event.payload.line);
+          const otherLogs = gameLogs.filter(
+            (entry) => entry.instanceId !== event.payload.instanceId,
+          );
+          const instanceLogs = gameLogs
+            .filter((entry) => entry.instanceId === event.payload.instanceId)
+            .slice(-1999);
+          gameLogs = [...otherLogs, ...instanceLogs, event.payload];
+          if (event.payload.instanceId === selectedId) collectFabricIssue(event.payload.line);
         }),
         listen<{ phase: string; message: string }>("launcher://status", (event) => {
           launcherStatus = event.payload.message;
@@ -531,7 +937,8 @@
           );
         }),
         listen<string>("launcher://game-started", (event) => {
-          gameLogs = [];
+          gameLogs = gameLogs.filter((entry) => entry.instanceId !== event.payload);
+          selectedConsoleId = event.payload;
           runningInstanceIds = [...new Set([...runningInstanceIds, event.payload])];
           gameProcessExited = false;
           minecraftClientStarted = false;
@@ -547,6 +954,32 @@
         listen<{ instanceId: string; exitCode: number | null }>(
           "launcher://game-exited",
           (event) => {
+            const exitedInstanceLogs = gameLogs.filter(
+              (entry) => entry.instanceId === event.payload.instanceId,
+            );
+            const stopWasRequested = requestedStopInstanceIds.delete(event.payload.instanceId);
+            const stoppedByUser =
+              stopWasRequested || stoppingInstanceIds.includes(event.payload.instanceId);
+            if (event.payload.exitCode !== 0 && !stoppedByUser) {
+              gameLogs = [
+                ...gameLogs,
+                {
+                  instanceId: event.payload.instanceId,
+                  stream: "stderr",
+                  line: `[Ninja Launcher] Minecraft exited unexpectedly with code ${event.payload.exitCode ?? "unknown"}.`,
+                },
+              ];
+              const hasRepairableFabricFailure =
+                !minecraftClientStarted &&
+                exitedInstanceLogs.some((entry) => startsRepairableFabricLoaderFailure(entry.line));
+              if (!hasRepairableFabricFailure) {
+                crashDetails = createCrashDetails(
+                  event.payload.instanceId,
+                  event.payload.exitCode,
+                  exitedInstanceLogs,
+                );
+              }
+            }
             runningInstanceIds = runningInstanceIds.filter((id) => id !== event.payload.instanceId);
             launchingInstanceIds = launchingInstanceIds.filter(
               (id) => id !== event.payload.instanceId,
@@ -556,11 +989,12 @@
             );
             gameProcessExited = true;
             launchProgress = null;
-            launcherStatus =
-              event.payload.exitCode === 0
+            launcherStatus = stoppedByUser
+              ? "Minecraft stopped"
+              : event.payload.exitCode === 0
                 ? "Minecraft closed normally"
                 : `Minecraft exited with code ${event.payload.exitCode ?? "unknown"}`;
-            window.setTimeout(finalizeFabricFailure, 300);
+            if (!stoppedByUser) window.setTimeout(finalizeFabricFailure, 300);
           },
         ),
       ]).then((listeners) => (unlisteners = listeners));
@@ -572,6 +1006,7 @@
       instancesRequest,
       getAccounts(),
       listSupportedVersions(),
+      listVanillaVersions(),
       listRunningInstances(),
       instancesRequest
         .then((loadedInstances) => {
@@ -591,6 +1026,7 @@
           loadedInstances,
           loadedAccounts,
           loadedVersions,
+          loadedVanillaVersions,
           loadedRunning,
           loadedClientBootstrap,
         ]) => {
@@ -601,6 +1037,7 @@
           account =
             accounts.find((item) => item.uuid === loadedAccounts.activeUuid) ?? accounts[0] ?? null;
           allVersions = loadedVersions;
+          vanillaVersions = loadedVanillaVersions;
           runningInstanceIds = loadedRunning;
           clientBootstrap = loadedClientBootstrap;
           if (loadedSettings.shareAnonymousUsageData) {
@@ -628,29 +1065,49 @@
 >
 
 <div
-  class="launcher-shell flex h-screen min-h-[640px] flex-col overflow-hidden text-[#f1f7ff] {showCustomTitlebar
-    ? 'rounded-[12px] [.window-maximized_&]:rounded-none'
-    : ''}"
+  class="launcher-shell relative flex h-screen min-h-[640px] flex-col overflow-hidden text-[#f1f7ff] {launcherAssembly
+    ? 'launcher-assembly'
+    : ''} {showCustomTitlebar ? 'rounded-[12px] [.window-maximized_&]:rounded-none' : ''}"
 >
   {#if showCustomTitlebar}<WindowTitlebar
       {notifications}
+      {runningInstances}
+      {stoppingInstanceIds}
       onsettings={() => (activePage = "settings")}
+      onstopinstance={stopInstance}
+      onopenconsole={(id) => {
+        selectedConsoleId = id;
+        activePage = "logs";
+      }}
       ondismissnotification={dismissNotification}
       onclearnotifications={clearAllNotifications}
       onnotificationaction={openNotification}
     />{/if}
-  <div class="flex min-h-0 flex-1">
+  {#if bannerAnnouncements[0]}
+    <AnnouncementBanner
+      announcement={bannerAnnouncements[0]}
+      ondismiss={(id) => (dismissedAnnouncementIds = [...dismissedAnnouncementIds, id])}
+    />
+  {/if}
+  <div class="launcher-body flex min-h-0 flex-1">
     <Sidebar
       active={activePage}
       {account}
       rank={networkRanks?.ranks.find((rank) => rank.primary) ?? networkRanks?.ranks[0] ?? null}
-      modCount={instance?.mods.length ?? 0}
+      {networkRanks}
+      halloweenTheme={halloweenThemeActive}
+      modCount={!instance || instance.loader === "vanilla"
+        ? null
+        : instance.mods.length + (instance.modpack?.packMods.length ?? 0)}
       onnavigate={(page) => (activePage = page)}
       onaccount={() => (accountOpen = true)}
     />
     <main
       bind:this={mainElement}
-      class="min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+      class="launcher-main min-w-0 flex-1 overflow-x-hidden overscroll-contain {activePage ===
+      'home'
+        ? 'overflow-y-hidden'
+        : 'overflow-y-auto'}"
     >
       <div class="mx-auto w-full max-w-[1120px] py-6 pl-8 pr-16">
         {#if loading}
@@ -672,27 +1129,36 @@
               {#if activePage === "instances"}<InstancesPage
                   {instances}
                   {versions}
+                  vanillaVersions={managedVanillaVersions.filter(
+                    (version) => settings.showSnapshots || version.versionType !== "snapshot",
+                  )}
                   {selectedId}
                   installation={modpackInstallation}
                   runningIds={runningInstanceIds}
                   onselect={(id) => (selectedId = id)}
                   onchanged={refreshInstances}
+                  onimportfile={importSelectedModpackFile}
                 />
               {:else if activePage === "skins"}{#key account?.uuid}<SkinsPage
                     {account}
                     onnotify={showToast}
                   />{/key}
               {:else if activePage === "logs"}<LogsPage
-                  logs={gameLogs}
-                  running={gameRunning}
-                  onclear={() => (gameLogs = [])}
+                  consoles={instanceConsoles}
+                  selectedId={selectedConsoleId}
+                  onselect={(id) => (selectedConsoleId = id)}
+                  onclear={(id) => (gameLogs = gameLogs.filter((entry) => entry.instanceId !== id))}
                 />
-              {:else if activePage === "settings"}<SettingsPage bind:settings {overview} />
+              {:else if activePage === "settings"}<SettingsPage
+                  bind:settings
+                  {overview}
+                  halloweenAvailable={halloweenThemeAvailable}
+                />
               {:else if activePage === "modpacks"}<ModpacksPage
                   {versions}
                   installation={modpackInstallation}
                   oninstall={installSelectedModpack}
-                  onimport={finishModpackInstall}
+                  onimportfile={importSelectedModpackFile}
                 />
               {:else if !instance}<div class="mc-panel p-10 text-center">
                   <h2 class="block-title text-lg uppercase">No profile selected</h2>
@@ -707,10 +1173,13 @@
               {:else if activePage === "home"}<HomePage
                   {instance}
                   {instances}
-                  {versions}
+                  versions={selectedVersions}
                   {account}
                   signedIn={account !== null}
                   {networkRanks}
+                  halloweenTheme={halloweenThemeActive}
+                  halloweenSoundsEnabled={settings.halloweenSoundsEnabled}
+                  animationsEnabled={settings.animationsEnabled}
                   {launching}
                   running={gameRunning}
                   {stopping}
@@ -718,6 +1187,8 @@
                   status={launcherStatus}
                   maintenanceActive={clientBootstrap?.configuration.maintenanceActive ?? false}
                   maintenanceMessage={clientBootstrap?.configuration.maintenanceMessage ?? ""}
+                  maintenanceEndsAt={clientBootstrap?.configuration.maintenanceEndsAt ?? null}
+                  versionAvailable={currentVersionAvailable}
                   onplay={() => play()}
                   onconnect={play}
                   onstop={stopSelectedGame}
@@ -725,9 +1196,23 @@
                   onversionchange={changeVersion}
                   onprofilechange={(id) => (selectedId = id)}
                 />
-              {:else}<ModsPage
+              {:else if instance.loader === "vanilla"}<div class="mc-panel p-8">
+                  <div class="flex items-start gap-4">
+                    <span
+                      class="grid size-12 shrink-0 place-items-center text-[var(--color-primary)]"
+                      ><Icon name="vanilla" size={24} /></span
+                    >
+                    <div>
+                      <h2 class="text-lg font-bold">Vanilla profile</h2>
+                      <p class="mt-2 max-w-xl text-xs leading-6 text-[var(--color-text-muted)]">
+                        Vanilla profiles launch Minecraft without Fabric. Choose or create a Fabric
+                        profile to install mods.
+                      </p>
+                    </div>
+                  </div>
+                </div>{:else}<ModsPage
                   {instance}
-                  {versions}
+                  versions={selectedVersions}
                   onchanged={refreshInstances}
                   onversionchange={changeVersion}
                   onnotify={showToast}
@@ -739,71 +1224,146 @@
     </main>
   </div>
 </div>
+{#if halloweenThemeActive && settings.halloweenSoundsEnabled && !gameRunning && !launching}
+  <HalloweenIdleSounds />
+{/if}
+{#if halloweenIntroOpen}
+  <HalloweenIntroDialog
+    onclose={() => dismissHalloweenIntro()}
+    onopensettings={() => dismissHalloweenIntro(true)}
+  />
+{/if}
+{#if modpackInstallation}
+  <aside
+    class="fixed bottom-5 right-5 z-[170] w-[330px] overflow-hidden rounded-[12px] border border-white/[.11] bg-[var(--color-section-background)] shadow-[0_22px_70px_rgba(0,0,0,.58)] backdrop-blur-xl"
+    aria-live="polite"
+    aria-atomic="true"
+  >
+    <button
+      type="button"
+      onclick={() => (activePage = "instances")}
+      class="flex w-full items-center gap-3 p-4 text-left transition hover:bg-white/[.035]"
+    >
+      <span
+        class="grid size-11 shrink-0 place-items-center overflow-hidden rounded-[8px] border border-white/[.09] bg-white/[.04]"
+      >
+        {#if modpackInstallation.iconUrl}
+          <img
+            src={modpackInstallation.iconUrl}
+            alt=""
+            class="size-full object-cover"
+            draggable="false"
+          />
+        {:else}
+          <Icon name="modpacks" size={18} />
+        {/if}
+      </span>
+      <span class="min-w-0 flex-1">
+        <span
+          class="block text-[9px] font-bold uppercase tracking-[.14em] text-[var(--color-primary)]"
+        >
+          {modpackInstallation.phase === "installing"
+            ? modpackInstallation.source === "file"
+              ? "Importing modpack"
+              : "Installing modpack"
+            : modpackInstallation.phase === "complete"
+              ? "Import complete"
+              : "Import failed"}
+        </span>
+        <span class="mt-1 block truncate text-xs font-bold text-white">
+          {modpackInstallation.name}
+        </span>
+        <span class="mt-1 block truncate text-[10px] text-[var(--color-text-muted)]">
+          {modpackInstallation.phase === "installing"
+            ? "Creating the profile in the background…"
+            : modpackInstallation.phase === "complete"
+              ? "The new profile is ready to use."
+              : (modpackInstallation.error ?? "The import could not be completed.")}
+        </span>
+      </span>
+      {#if modpackInstallation.phase === "installing"}
+        <span
+          class="size-5 shrink-0 animate-spin rounded-full border-2 border-white/10 border-t-[var(--color-primary)]"
+          aria-label="Import in progress"
+        ></span>
+      {:else if modpackInstallation.phase === "complete"}
+        <span class="text-[var(--color-success)]"><Icon name="check" size={17} /></span>
+      {:else}
+        <span class="text-[var(--color-danger)]"><Icon name="warning" size={17} /></span>
+      {/if}
+    </button>
+    {#if modpackInstallation.phase === "installing"}
+      <div class="h-1 overflow-hidden bg-white/[.05]">
+        <div class="modpack-import-progress h-full w-2/5 bg-[var(--color-primary)]"></div>
+      </div>
+    {:else}
+      <button
+        type="button"
+        onclick={() => (modpackInstallation = null)}
+        class="absolute right-1.5 top-1.5 grid size-7 place-items-center rounded-[6px] text-[var(--color-text-muted)] hover:bg-white/[.07] hover:text-white"
+        aria-label="Dismiss import status"
+      >
+        <Icon name="close" size={11} />
+      </button>
+    {/if}
+  </aside>
+{/if}
 <ToastStack items={toastItems} ondismiss={dismissToast} />
+{#if crashDetails}
+  <CrashDialog
+    crash={crashDetails}
+    onclose={() => (crashDetails = null)}
+    onrepair={repairLaunchProfile}
+    onupload={uploadCrashToDashboard}
+    onopenconsole={(instanceId) => {
+      selectedConsoleId = instanceId;
+      activePage = "logs";
+      crashDetails = null;
+    }}
+  />
+{/if}
 {#if !showCustomTitlebar}<NotificationCenter
     items={notifications}
     ondismiss={dismissNotification}
     onclear={clearAllNotifications}
     onaction={openNotification}
   />{/if}
-{#if fabricDialogOpen && fabricIssue}<div
-    class="fixed inset-0 z-[75] grid place-items-center bg-[#010612]/88 p-6"
-    role="presentation"
-    onclick={(event) =>
-      event.currentTarget === event.target && !fabricRepairing && (fabricDialogOpen = false)}
-  >
-    <div
-      class="mc-panel w-full max-w-2xl overflow-hidden border-red-400/30"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="fabric-error-title"
-    >
-      <div class="flex items-start gap-4 border-b border-red-300/15 bg-red-400/[0.08] px-6 py-5">
-        <div
-          class="grid size-11 shrink-0 place-items-center bg-red-400/15 text-xl font-black text-red-200"
-        >
-          !
-        </div>
-        <div>
-          <p class="text-[9px] font-bold uppercase tracking-[.16em] text-red-300/65">
-            Fabric Loader
-          </p>
-          <h2 id="fabric-error-title" class="block-title mt-1 text-lg uppercase">
-            Incompatible mods detected
-          </h2>
-          <p class="mt-2 text-xs leading-5 text-red-100/65">
-            Minecraft could not start correctly. Ninja Launcher can reset incompatible pinned
-            versions and disable an explicitly identified personal conflict mod if required.
-          </p>
-        </div>
-      </div>
-      <div class="p-6">
-        <pre
-          class="max-h-72 overflow-auto whitespace-pre-wrap break-words border border-red-300/12 bg-[#010714] p-4 font-mono text-[10px] leading-5 text-[#d7b8bf]">{fabricIssue}</pre>
-        {#if gameRunning}<p
-            class="mt-3 border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-[10px] text-amber-100/70"
-          >
-            Minecraft is still running. Automatic repair becomes available after the game closes.
-          </p>{/if}
-        <div class="mt-5 flex justify-end gap-3">
-          <button
-            onclick={() => (fabricDialogOpen = false)}
-            disabled={fabricRepairing}
-            class="mc-secondary px-4 py-2.5 text-xs font-bold disabled:opacity-50">Close</button
-          >
-          <button
-            onclick={repairFabric}
-            disabled={fabricRepairing || gameRunning || launching}
-            class="border border-red-300/35 bg-red-400/15 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-red-100 hover:bg-red-400/25 disabled:opacity-50"
-            >{fabricRepairing ? "Repairing…" : "Repair automatically"}</button
-          >
-        </div>
-      </div>
-    </div>
-  </div>{/if}
+{#if fabricDialogOpen && fabricCrashDetails}
+  <CrashDialog
+    crash={fabricCrashDetails}
+    onclose={() => (fabricDialogOpen = false)}
+    onrepair={repairFabric}
+    onupload={uploadCrashToDashboard}
+    onopenconsole={(instanceId) => {
+      selectedConsoleId = instanceId;
+      activePage = "logs";
+      fabricDialogOpen = false;
+    }}
+  />
+{/if}
+{#if !loading && !settings.setupComplete}
+  <SetupWizard
+    {settings}
+    {overview}
+    initialAccount={account}
+    initialAccounts={accounts}
+    defaultInstanceId={selectedId || "default-fabric"}
+    oninstalled={refreshAfterSetup}
+    onfinish={(completedSettings, completedAccount, completedAccounts) => {
+      launcherAssembly = completedSettings.animationsEnabled;
+      settings = completedSettings;
+      account = completedAccount;
+      accounts = completedAccounts;
+      if (launcherAssembly) {
+        window.setTimeout(() => (launcherAssembly = false), 2400);
+      }
+    }}
+  />
+{/if}
 {#if accountOpen}<AccountDialog
     bind:account
     bind:accounts
+    {networkRanks}
     onclose={() => (accountOpen = false)}
   />{/if}
 {#if appUpdate && ["downloading", "installing", "restarting"].includes(appUpdate.phase)}

@@ -6,4 +6,5 @@ pub mod modpacks;
 pub mod mods;
 pub mod network;
 pub mod settings;
+pub mod setup;
 pub mod skins;

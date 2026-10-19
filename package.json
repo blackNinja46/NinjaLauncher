@@ -1,6 +1,6 @@
 {
   "name": "ninjalauncher",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0",
   "description": "",
   "type": "module",
   "scripts": {
@@ -8,6 +8,8 @@
     "build": "vite build",
     "format": "prettier --write src",
     "format:check": "prettier --check src",
+    "icons:macos": "swift scripts/generate-platform-icons.swift --macos-only && bash scripts/compile-macos-icon.sh",
+    "icons:windows": "CLANG_MODULE_CACHE_PATH=${TMPDIR:-/tmp}/ninja-launcher-clang-cache swift scripts/generate-platform-icons.swift --windows-only && bash scripts/compile-windows-icon.sh",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -21,7 +23,10 @@
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
-    "skinview3d": "^3.4.2"
+    "dompurify": "^3.4.17",
+    "marked": "^18.1.1",
+    "skinview3d": "^3.4.2",
+    "three": "^0.156.1"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

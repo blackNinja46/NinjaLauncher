@@ -81,7 +81,11 @@
         : notice
           ? { title: "Skin aktualisiert", message: notice, tone: "success" as const }
           : profileError
-            ? { title: "Minecraft-Profil nicht verfügbar", message: profileError, tone: "warning" as const }
+            ? {
+                title: "Minecraft-Profil nicht verfügbar",
+                message: profileError,
+                tone: "warning" as const,
+              }
             : null;
     const key = current ? `${current.tone}:${current.title}:${current.message}` : "";
     if (current && key !== lastNotification) onnotify(current);
@@ -674,7 +678,6 @@
                 >{/if}
             </div>
           </fieldset>
-
         </div>
       </div>
       <footer

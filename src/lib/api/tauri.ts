@@ -6,11 +6,14 @@ import type {
   Account,
   AccountState,
   ClientBootstrap,
+  CrashReportSubmission,
   DeviceCode,
   FabricLoaderVersionOption,
   LauncherInstance,
   LauncherOverview,
   LauncherSettings,
+  JavaRuntimeInfo,
+  MinecraftImportReport,
   ModConflictReport,
   ModRepairReport,
   ModpackExportReport,
@@ -18,13 +21,19 @@ import type {
   ModrinthProject,
   ModrinthSearchResponse,
   ModrinthVersion,
+  InstalledModFile,
   PlayerRanks,
   ProfileContentFile,
   ProfileContentKind,
   SupportedVersion,
+  SetupPaths,
+  SystemMemoryInfo,
 } from "$lib/types";
 
 const defaultSettings: LauncherSettings = {
+  setupComplete: false,
+  installationPath: null,
+  termsAcceptedAt: null,
   allocatedMemoryMb: 4096,
   javaPath: null,
   downloadConcurrency: 4,
@@ -34,6 +43,10 @@ const defaultSettings: LauncherSettings = {
   showSnapshots: false,
   language: "en",
   theme: "dark",
+  animationsEnabled: true,
+  parallaxEnabled: true,
+  halloweenThemeEnabled: true,
+  halloweenSoundsEnabled: true,
   checkForUpdates: true,
   discordRichPresence: true,
   shareAnonymousUsageData: false,
@@ -116,8 +129,47 @@ export const listSupportedVersions = (): Promise<SupportedVersion[]> =>
             "1.21.2",
             "1.21.1",
             "1.21",
+            "1.20.6",
+            "1.20.5",
+            "1.20.4",
+            "1.20.3",
+            "1.20.2",
+            "1.20.1",
+            "1.20",
+            "1.19.4",
+            "1.19.3",
+            "1.19.2",
+            "1.19.1",
+            "1.19",
+            "1.18.2",
+            "1.18.1",
+            "1.18",
+            "1.17.1",
+            "1.17",
+            "1.16.5",
+            "1.16.4",
+            "1.16.3",
+            "1.16.2",
+            "1.16.1",
+            "1.16",
+            "1.15.2",
+            "1.15.1",
+            "1.15",
+            "1.14.4",
+            "1.14.3",
+            "1.14.2",
+            "1.14.1",
+            "1.14",
           ].map((minecraftVersion) => ({ minecraftVersion, versionType: "release" as const })),
         ].map((version) => ({ ...version, fabricLoaderVersion: "0.19.3" })),
+      );
+export const listVanillaVersions = (): Promise<SupportedVersion[]> =>
+  inTauri()
+    ? invoke("list_vanilla_versions")
+    : listSupportedVersions().then((versions) =>
+        versions
+          .slice(0, versions.findIndex((version) => version.minecraftVersion === "1.15") + 1)
+          .map((version) => ({ ...version, fabricLoaderVersion: "" })),
       );
 export const listFabricLoaderVersions = (): Promise<FabricLoaderVersionOption[]> =>
   inTauri()
@@ -125,10 +177,16 @@ export const listFabricLoaderVersions = (): Promise<FabricLoaderVersionOption[]>
     : Promise.resolve([{ version: "0.19.3", stable: true }]);
 export const saveInstance = (instance: LauncherInstance) =>
   invoke<LauncherInstance>("save_instance", { instance });
-export const createInstance = (name: string, minecraftVersion: string, loaderVersion: string) =>
-  invoke<LauncherInstance>("create_instance", { name, minecraftVersion, loaderVersion });
+export const createInstance = (
+  name: string,
+  minecraftVersion: string,
+  loader: LauncherInstance["loader"],
+  loaderVersion: string,
+) => invoke<LauncherInstance>("create_instance", { name, minecraftVersion, loader, loaderVersion });
 export const duplicateInstance = (id: string) =>
   invoke<LauncherInstance>("duplicate_instance", { id });
+export const createEditableModpackCopy = (id: string) =>
+  invoke<LauncherInstance>("create_editable_modpack_copy", { id });
 export const deleteInstance = (id: string) => invoke<void>("delete_instance", { id });
 export const openInstanceFolder = (id: string) => invoke<void>("open_instance_folder", { id });
 export const listProfileContent = (instanceId: string, kind: ProfileContentKind) =>
@@ -154,8 +212,12 @@ export const removeProfileContent = (
   kind: ProfileContentKind,
   fileName: string,
 ) => invoke<void>("remove_profile_content", { instanceId, kind, fileName });
-export const setResourcePackEnabled = (instanceId: string, fileName: string, enabled: boolean) =>
-  invoke<void>("set_resource_pack_enabled", { instanceId, fileName, enabled });
+export const setProfileContentEnabled = (
+  instanceId: string,
+  kind: ProfileContentKind,
+  fileName: string,
+  enabled: boolean,
+) => invoke<void>("set_profile_content_enabled", { instanceId, kind, fileName, enabled });
 export const openProfileContentFolder = (instanceId: string, kind: ProfileContentKind) =>
   invoke<void>("open_profile_content_folder", { instanceId, kind });
 export const searchProfileContent = (
@@ -230,6 +292,16 @@ export const getInstalledModVersions = (instanceId: string) =>
   inTauri()
     ? invoke<Record<string, string>>("get_installed_mod_versions", { instanceId })
     : Promise.resolve({});
+export const listInstalledModFiles = (instanceId: string) =>
+  inTauri()
+    ? invoke<InstalledModFile[]>("list_installed_mod_files", { instanceId })
+    : Promise.resolve([]);
+export const addLocalModFile = (instanceId: string, path: string) =>
+  invoke<InstalledModFile>("add_local_mod_file", { instanceId, path });
+export const setLocalModEnabled = (instanceId: string, fileName: string, enabled: boolean) =>
+  invoke<void>("set_local_mod_enabled", { instanceId, fileName, enabled });
+export const removeLocalModFile = (instanceId: string, fileName: string) =>
+  invoke<void>("remove_local_mod_file", { instanceId, fileName });
 export const analyzeModConflicts = (instanceId: string) =>
   inTauri()
     ? invoke<ModConflictReport>("analyze_mod_conflicts", { instanceId })
@@ -284,10 +356,12 @@ export async function chooseModpackFile(): Promise<ModpackFileInspection | null>
   });
   return path ? invoke<ModpackFileInspection>("inspect_modpack_file", { path }) : null;
 }
+export const inspectModpackFile = (path: string) =>
+  invoke<ModpackFileInspection>("inspect_modpack_file", { path });
 export const importModpackFile = (path: string, allowForeignMods: boolean) =>
   invoke<LauncherInstance>("import_modpack_file", { path, allowForeignMods });
-export const refreshImportedModpackMods = (instanceId: string) =>
-  invoke<LauncherInstance>("refresh_imported_modpack_mods", { instanceId });
+export const refreshModpackMods = (instanceId: string) =>
+  invoke<LauncherInstance>("refresh_modpack_mods", { instanceId });
 export const listExportableFolders = (instanceId: string) =>
   invoke<string[]>("list_exportable_folders", { instanceId });
 export async function exportModpackFile(
@@ -362,6 +436,39 @@ export const stopGame = (instanceId: string) => invoke<void>("stop_game", { inst
 export const openLauncherFolder = () => invoke<void>("open_launcher_folder");
 export const openLogsFolder = () => invoke<void>("open_logs_folder");
 
+export async function chooseJavaExecutable(current?: string | null): Promise<string | null> {
+  if (!inTauri()) return current ?? "/usr/bin/java";
+  const path = await open({
+    multiple: false,
+    directory: false,
+    defaultPath: current ?? undefined,
+    title: "Choose Java executable",
+  });
+  return typeof path === "string" ? path : null;
+}
+
+export const getSystemMemory = (): Promise<SystemMemoryInfo> =>
+  inTauri()
+    ? invoke("get_system_memory")
+    : Promise.resolve({
+        totalMb: ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 16) * 1024,
+        recommendedMaxMb:
+          Math.min(
+            ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 16) - 2,
+            32,
+          ) * 1024,
+      });
+
+export const inspectJavaRuntime = (javaPath?: string | null): Promise<JavaRuntimeInfo> =>
+  inTauri()
+    ? invoke("inspect_java_runtime", { javaPath: javaPath?.trim() || null })
+    : Promise.resolve({
+        path: javaPath?.trim() || "/usr/bin/java",
+        version: "21.0.2",
+        major: 21,
+        source: javaPath?.trim() ? "Custom runtime" : "System PATH",
+      });
+
 export async function getSettings(): Promise<LauncherSettings> {
   if (!inTauri()) return { ...defaultSettings };
   return invoke<LauncherSettings>("get_settings");
@@ -370,6 +477,34 @@ export async function getSettings(): Promise<LauncherSettings> {
 export async function saveSettings(settings: LauncherSettings): Promise<LauncherSettings> {
   if (!inTauri()) return settings;
   return invoke<LauncherSettings>("save_settings", { settings });
+}
+
+export async function getSetupPaths(): Promise<SetupPaths> {
+  if (!inTauri()) {
+    return {
+      recommendedInstallationPath: "NinjaLauncher",
+      minecraftDirectory: ".minecraft",
+    };
+  }
+  return invoke<SetupPaths>("get_setup_paths");
+}
+
+export async function chooseInstallationDirectory(defaultPath?: string): Promise<string | null> {
+  if (!inTauri()) return defaultPath ?? "NinjaLauncher";
+  const selected = await open({
+    multiple: false,
+    directory: true,
+    defaultPath: defaultPath || undefined,
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function importMinecraftData(
+  sourcePath: string,
+  instanceId: string,
+): Promise<MinecraftImportReport> {
+  if (!inTauri()) return { copiedFiles: 18, skippedFiles: 0 };
+  return invoke<MinecraftImportReport>("import_minecraft_data", { sourcePath, instanceId });
 }
 
 export async function getLauncherOverview(): Promise<LauncherOverview> {
@@ -418,6 +553,9 @@ export const recordClientEvent = (
         minecraftVersion: minecraftVersion ?? null,
       })
     : Promise.resolve();
+
+export const uploadCrashReport = (report: CrashReportSubmission) =>
+  inTauri() ? invoke<void>("upload_crash_report", { report }) : Promise.resolve();
 
 export function messageFromError(error: unknown): string {
   if (typeof error === "string") return error;

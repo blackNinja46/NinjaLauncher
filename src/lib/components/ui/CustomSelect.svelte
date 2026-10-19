@@ -209,6 +209,8 @@
       color-mix(in srgb, var(--color-navy-950) 97%, transparent) 52%
     );
     scrollbar-width: thin;
-    scrollbar-color: var(--color-cyan-200) 80%, transparent;
+    scrollbar-color:
+      var(--color-cyan-200) 80%,
+      transparent;
   }
 </style>

@@ -24,9 +24,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let paths = PathManager::from_app(app.handle())?;
+            let settings = storage::config::load(&paths)?;
+            paths.set_content_root(settings.installation_path.as_deref())?;
             paths.ensure_directories()?;
             instances::manager::ensure_default(&paths)?;
-            let settings = storage::config::load(&paths)?;
             let discord_presence = discord::DiscordPresence::new(settings.discord_rich_presence);
             if settings.discord_rich_presence {
                 discord_presence.show_launcher();
@@ -43,16 +44,23 @@ pub fn run() {
             commands::launcher::get_launcher_overview,
             commands::launcher::get_launcher_bootstrap,
             commands::launcher::record_client_event,
+            commands::launcher::upload_crash_report,
             commands::launcher::open_launcher_folder,
             commands::launcher::open_logs_folder,
             commands::settings::get_settings,
             commands::settings::save_settings,
+            commands::settings::get_system_memory,
+            commands::settings::inspect_java_runtime,
+            commands::setup::get_setup_paths,
+            commands::setup::import_minecraft_data,
             commands::instances::list_instances,
             commands::instances::list_supported_versions,
+            commands::instances::list_vanilla_versions,
             commands::instances::list_fabric_loader_versions,
             commands::instances::save_instance,
             commands::instances::create_instance,
             commands::instances::duplicate_instance,
+            commands::instances::create_editable_modpack_copy,
             commands::instances::delete_instance,
             commands::instances::open_instance_folder,
             commands::instances::list_profile_content,
@@ -60,7 +68,7 @@ pub fn run() {
             commands::instances::search_profile_content,
             commands::instances::list_profile_content_versions,
             commands::instances::install_profile_content,
-            commands::instances::set_resource_pack_enabled,
+            commands::instances::set_profile_content_enabled,
             commands::instances::remove_profile_content,
             commands::instances::open_profile_content_folder,
             commands::mods::search_mods,
@@ -68,6 +76,10 @@ pub fn run() {
             commands::mods::get_mod_details,
             commands::mods::list_mod_versions,
             commands::mods::get_installed_mod_versions,
+            commands::mods::list_installed_mod_files,
+            commands::mods::add_local_mod_file,
+            commands::mods::set_local_mod_enabled,
+            commands::mods::remove_local_mod_file,
             commands::mods::analyze_mod_conflicts,
             commands::mods::repair_mod_configuration,
             commands::mods::add_mod,
@@ -79,7 +91,7 @@ pub fn run() {
             commands::modpacks::install_modpack,
             commands::modpacks::inspect_modpack_file,
             commands::modpacks::import_modpack_file,
-            commands::modpacks::refresh_imported_modpack_mods,
+            commands::modpacks::refresh_modpack_mods,
             commands::modpacks::list_exportable_folders,
             commands::modpacks::export_modpack,
             commands::skins::list_skins,

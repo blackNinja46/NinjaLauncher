@@ -118,6 +118,10 @@ pub struct LoggingFile {
 }
 #[derive(Debug, Deserialize)]
 pub struct AssetIndex {
+    #[serde(default, rename = "virtual")]
+    pub virtual_: bool,
+    #[serde(default, rename = "map_to_resources")]
+    pub map_to_resources: bool,
     pub objects: HashMap<String, AssetObject>,
 }
 #[derive(Debug, Deserialize)]
@@ -127,19 +131,19 @@ pub struct AssetObject {
     pub size: u64,
 }
 
-pub fn applies(rules: &[Rule]) -> bool {
+pub fn applies_for_arch(rules: &[Rule], arch: &str) -> bool {
     if rules.is_empty() {
         return true;
     }
     let mut allowed = false;
     for rule in rules {
-        if matches_rule(rule) {
+        if matches_rule(rule, arch) {
             allowed = rule.action == "allow";
         }
     }
     allowed
 }
-fn matches_rule(rule: &Rule) -> bool {
+fn matches_rule(rule: &Rule, current_arch: &str) -> bool {
     if let Some(os) = &rule.os {
         if let Some(name) = &os.name {
             if name != current_os() {
@@ -147,7 +151,7 @@ fn matches_rule(rule: &Rule) -> bool {
             }
         }
         if let Some(arch) = &os.arch {
-            if !current_arch().contains(arch) && !arch.contains(current_arch()) {
+            if !current_arch.contains(arch) && !arch.contains(current_arch) {
                 return false;
             }
         }
@@ -175,15 +179,17 @@ pub fn current_arch() -> &'static str {
         "x86_64"
     }
 }
-pub fn expand_arguments(arguments: &[Argument]) -> Vec<String> {
+pub fn expand_arguments_for_arch(arguments: &[Argument], arch: &str) -> Vec<String> {
     arguments
         .iter()
         .flat_map(|argument| match argument {
             Argument::Plain(value) => vec![value.clone()],
-            Argument::Conditional { rules, value } if applies(rules) => match value {
-                ArgumentValue::One(value) => vec![value.clone()],
-                ArgumentValue::Many(values) => values.clone(),
-            },
+            Argument::Conditional { rules, value } if applies_for_arch(rules, arch) => {
+                match value {
+                    ArgumentValue::One(value) => vec![value.clone()],
+                    ArgumentValue::Many(values) => values.clone(),
+                }
+            }
             _ => Vec::new(),
         })
         .collect()

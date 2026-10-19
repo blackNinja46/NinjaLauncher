@@ -1,20 +1,23 @@
 <script lang="ts">
   import { tick } from "svelte";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
+  import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import { openLogsFolder } from "$lib/api/tauri";
-  import type { GameLogEntry } from "$lib/types";
+  import type { GameLogEntry, InstanceConsole } from "$lib/types";
 
   type LogLevel = "info" | "warning" | "error" | "debug";
   type LogFilter = "all" | LogLevel;
 
   let {
-    logs,
-    running,
+    consoles,
+    selectedId,
+    onselect,
     onclear,
   }: {
-    logs: GameLogEntry[];
-    running: boolean;
-    onclear: () => void;
+    consoles: InstanceConsole[];
+    selectedId: string;
+    onselect: (id: string) => void;
+    onclear: (id: string) => void;
   } = $props();
   let consoleElement: HTMLDivElement;
   let follow = $state(true);
@@ -27,6 +30,18 @@
     { id: "error", label: "Errors" },
     { id: "debug", label: "Debug" },
   ];
+
+  let selectedConsole = $derived(
+    consoles.find((item) => item.id === selectedId) ?? consoles[0] ?? null,
+  );
+  let logs = $derived(selectedConsole?.logs ?? []);
+  let running = $derived(selectedConsole?.running ?? false);
+  let consoleOptions = $derived(
+    consoles.map((item) => ({
+      value: item.id,
+      label: `${item.name} · Minecraft ${item.minecraftVersion}${item.running ? " · Running" : ""}`,
+    })),
+  );
 
   function levelFor(entry: GameLogEntry): LogLevel {
     const line = entry.line.toLowerCase();
@@ -66,16 +81,28 @@
   });
 </script>
 
-<div class="flex items-start justify-between">
+<div class="flex flex-wrap items-start justify-between gap-4">
   <PageHeader
     title="Game Logs"
     description="Live Minecraft output for troubleshooting mods, Java, and crashes."
   />
-  <div class="flex gap-3">
+  <div class="flex items-center gap-3">
+    <CustomSelect
+      value={selectedConsole?.id ?? ""}
+      options={consoleOptions}
+      disabled={!consoles.length}
+      ariaLabel="Select game console"
+      displayLabel={selectedConsole ? `${selectedConsole.name} console` : "No game console"}
+      class="h-10 w-60"
+      onchange={(value) => onselect(String(value))}
+    />
     <button onclick={openLogsFolder} class="mc-secondary px-4 py-2.5 text-xs font-bold text-white"
       >Open log folder</button
     >
-    <button onclick={onclear} class="mc-secondary px-4 py-2.5 text-xs font-bold text-white"
+    <button
+      onclick={() => selectedConsole && onclear(selectedConsole.id)}
+      disabled={!selectedConsole || !logs.length}
+      class="mc-secondary px-4 py-2.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-45"
       >Clear</button
     >
   </div>
@@ -85,8 +112,13 @@
   <div class="flex items-center gap-3 border-b border-white/[0.08] bg-white/[0.02] px-4 py-3">
     <span class="size-2 {running ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-slate-500'}"
     ></span>
-    <span class="text-[10px] font-bold uppercase tracking-[.14em] text-[var(--color-text-secondary)]"
-      >{running ? "Minecraft running" : "Minecraft stopped"}</span
+    <span
+      class="text-[10px] font-bold uppercase tracking-[.14em] text-[var(--color-text-secondary)]"
+      >{selectedConsole
+        ? running
+          ? `${selectedConsole.name} running`
+          : `${selectedConsole.name} stopped`
+        : "No console selected"}</span
     >
     <label
       class="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]"
@@ -115,8 +147,8 @@
             : item.id === 'warning'
               ? 'bg-amber-400'
               : item.id === 'debug'
-              ? 'bg-cyan-500'
-              : 'bg-slate-300'}"
+                ? 'bg-cyan-500'
+                : 'bg-slate-300'}"
         ></span>
         {item.label}<span class="text-[9px] opacity-60">{counts[item.id]}</span>
       </button>
@@ -136,7 +168,15 @@
           <span class="mr-3 w-12 shrink-0 select-none text-[9px] font-bold uppercase opacity-45"
             >{item.level === "warning" ? "WARN" : item.level}</span
           >
-          <span class="whitespace-pre-wrap break-all {item.level === 'error' ? "text-red-400" : item.level === "warning" ? "text-amber-400" : item.level === "debug" ? "text-cyan-400" : "text-slate-400"}">{item.entry.line}</span>
+          <span
+            class="whitespace-pre-wrap break-all {item.level === 'error'
+              ? 'text-red-400'
+              : item.level === 'warning'
+                ? 'text-amber-400'
+                : item.level === 'debug'
+                  ? 'text-cyan-400'
+                  : 'text-slate-400'}">{item.entry.line}</span
+          >
         </div>
       {/each}
     {:else if logs.length}
@@ -152,9 +192,13 @@
       <div class="grid h-full place-items-center text-center text-[var(--color-text-faint)]">
         <div>
           <div class="text-sm font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-            Waiting for Minecraft :/
+            {selectedConsole ? "Waiting for Minecraft :/" : "No game consoles yet"}
           </div>
-          <p class="mt-2 text-xs">Game output will appear here after launch.</p>
+          <p class="mt-2 text-xs">
+            {selectedConsole
+              ? "Game output will appear here after launch."
+              : "Launch a profile to create its console."}
+          </p>
         </div>
       </div>
     {/if}

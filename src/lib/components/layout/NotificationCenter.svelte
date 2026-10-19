@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { fade, fly } from "svelte/transition";
   import Icon from "$lib/components/ui/Icon.svelte";
+  import InlineMessage from "$lib/components/ui/InlineMessage.svelte";
 
   type NotificationTone = "info" | "success" | "warning" | "error";
   type NotificationItem = {
@@ -57,10 +58,7 @@
   });
 </script>
 
-<div
-  bind:this={container}
-  class={embedded ? "relative z-30 h-full" : "fixed right-4 top-3.5 z-30"}
->
+<div bind:this={container} class={embedded ? "relative z-30 h-full" : "fixed right-4 top-3.5 z-30"}>
   <button
     type="button"
     class={embedded
@@ -75,8 +73,7 @@
     {#if items.length > 0}<span
         class="absolute grid h-[17px] min-w-[17px] place-items-center rounded-full border-2 border-[#0c0e12] bg-[var(--color-primary)] text-[9px] font-extrabold text-white {embedded
           ? 'right-1 top-0.5'
-          : '-right-[5px] -top-[5px]'}"
-        >{items.length}</span
+          : '-right-[5px] -top-[5px]'}">{items.length}</span
       >{/if}
   </button>
 
@@ -94,7 +91,8 @@
         <div>
           <h2 class="m-0 text-[22px] font-bold">Notifications</h2>
           <p class="mb-0 mt-0.5 text-[10px] text-[var(--color-text-faint)]">
-            {items.length} {items.length === 1 ? "message" : "messages"}
+            {items.length}
+            {items.length === 1 ? "message" : "messages"}
           </p>
         </div>
         <button
@@ -121,7 +119,7 @@
             <div class="min-w-0 flex-1">
               <h3 class="m-0 text-xs font-bold text-[var(--color-text-primary)]">{item.title}</h3>
               <p class="mb-0 mt-1 text-[11px] leading-[1.55] text-[var(--color-text-muted)]">
-                {item.message}
+                <InlineMessage message={item.message} />
               </p>
               {#if item.actionLabel}
                 <button
@@ -149,7 +147,8 @@
         <button
           type="button"
           class="border-0 bg-transparent px-1 py-[2px] text-[6px] font-extrabold tracking-[.02em] text-[var(--color-text-faint)] hover:text-[var(--color-text-secondary)]"
-          onclick={onclear}>
+          onclick={onclear}
+        >
           <Icon name="trash" size={13} />
           Clear all</button
         >

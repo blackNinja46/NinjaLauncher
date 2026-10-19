@@ -162,6 +162,8 @@ pub async fn install_modpack(
 
     let index = read_index(&archive_path)?;
     validate_index(&index)?;
+    let analysis = analyze_modpack_mods(&archive_path, &index, &client).await?;
+    let pack_mods = pack_mods_from_analysis(&client, analysis).await?;
     let minecraft_version = index
         .dependencies
         .get("minecraft")
@@ -215,8 +217,7 @@ pub async fn install_modpack(
                         .is_some_and(|env| env.client == "unsupported")
                 })
                 .count(),
-            // Packs installed from Modrinth stay represented as one managed pack.
-            pack_mods: Vec::new(),
+            pack_mods,
         }),
     };
     if let Err(error) = instance_manager::save(&paths, &instance) {
@@ -279,14 +280,7 @@ pub async fn import_modpack_file(
         let _ = std::fs::remove_dir_all(&directory);
         return Err(error);
     }
-    let mut pack_mods = pack_mods_from_versions(&client, analysis.versions).await?;
-    pack_mods.extend(
-        analysis
-            .foreign_mods
-            .into_iter()
-            .map(pack_mod_from_filename),
-    );
-    pack_mods.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    let pack_mods = pack_mods_from_analysis(&client, analysis).await?;
     let instance = InstanceConfig {
         id: instance_id,
         name: index.name.trim().to_string(),
@@ -311,17 +305,62 @@ pub async fn import_modpack_file(
 }
 
 #[tauri::command]
-pub async fn refresh_imported_modpack_mods(
+pub async fn refresh_modpack_mods(
     instance_id: String,
     paths: State<'_, PathManager>,
     client: State<'_, ModrinthClient>,
 ) -> Result<InstanceConfig, CommandError> {
     let mut instance = instance_manager::load(&paths, &instance_id)?;
-    let is_local_import = instance
+    let modpack = instance
         .modpack
         .as_ref()
-        .is_some_and(|modpack| modpack.project_id == "local-import");
-    if !is_local_import {
+        .cloned()
+        .ok_or_else(|| CommandError::new("This profile is not managed by a modpack."))?;
+
+    if modpack.project_id != "local-import" {
+        let archive_path = paths
+            .cache_dir()
+            .join("modpacks")
+            .join(&modpack.project_id)
+            .join(format!("{}.mrpack", modpack.version_id));
+        if !archive_path.is_file() {
+            let version =
+                select_version(&client, &modpack.project_id, Some(&modpack.version_id)).await?;
+            let pack_file = version
+                .files
+                .iter()
+                .find(|file| {
+                    file.primary && file.filename.to_ascii_lowercase().ends_with(".mrpack")
+                })
+                .or_else(|| {
+                    version
+                        .files
+                        .iter()
+                        .find(|file| file.filename.to_ascii_lowercase().ends_with(".mrpack"))
+                })
+                .ok_or_else(|| {
+                    CommandError::new("This Modrinth version has no .mrpack download.")
+                })?;
+            download_manager::download_one(
+                client.http(),
+                DownloadSpec {
+                    url: pack_file.url.clone(),
+                    path: archive_path.clone(),
+                    sha1: Some(pack_file.hashes.sha1.clone()),
+                    sha256: None,
+                    sha512: Some(pack_file.hashes.sha512.clone()),
+                },
+            )
+            .await?;
+        }
+        let index = read_index(&archive_path)?;
+        validate_index(&index)?;
+        let analysis = analyze_modpack_mods(&archive_path, &index, &client).await?;
+        let pack_mods = pack_mods_from_analysis(&client, analysis).await?;
+        if let Some(installed) = instance.modpack.as_mut() {
+            installed.pack_mods = pack_mods;
+        }
+        instance_manager::save(&paths, &instance)?;
         return Ok(instance);
     }
     let mods_directory = instance_manager::instance_dir(&paths, &instance_id)?.join("mods");
@@ -351,14 +390,15 @@ pub async fn refresh_imported_modpack_mods(
         .into_values()
         .map(|version| (version.project_id.clone(), version))
         .collect();
-    let mut pack_mods = pack_mods_from_versions(&client, versions).await?;
-    pack_mods.extend(
-        files_by_hash
+    let analysis = ModpackModAnalysis {
+        foreign_mods: files_by_hash
             .into_iter()
             .filter(|(hash, _)| !known_hashes.contains(&hash.to_ascii_lowercase()))
-            .map(|(_, filename)| pack_mod_from_filename(filename)),
-    );
-    pack_mods.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+            .map(|(_, filename)| filename)
+            .collect(),
+        versions,
+    };
+    let pack_mods = pack_mods_from_analysis(&client, analysis).await?;
     if let Some(modpack) = instance.modpack.as_mut() {
         modpack.pack_mods = pack_mods;
     }
@@ -688,6 +728,21 @@ async fn pack_mods_from_versions(
             }
         })
         .collect();
+    mods.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Ok(mods)
+}
+
+async fn pack_mods_from_analysis(
+    client: &ModrinthClient,
+    analysis: ModpackModAnalysis,
+) -> Result<Vec<PackMod>, CommandError> {
+    let mut mods = pack_mods_from_versions(client, analysis.versions).await?;
+    mods.extend(
+        analysis
+            .foreign_mods
+            .into_iter()
+            .map(pack_mod_from_filename),
+    );
     mods.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
     Ok(mods)
 }

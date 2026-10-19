@@ -2,8 +2,15 @@ import AppKit
 import Foundation
 
 let projectRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let markURL = projectRoot.appendingPathComponent("static/brand/ninja-launcher-mark.png")
+let markURL = projectRoot.appendingPathComponent("static/brand/ninja-launcher-mark-source.svg")
 let outputDirectory = projectRoot.appendingPathComponent("src-tauri/icons")
+let macOSDefaultIconURL = outputDirectory
+    .appendingPathComponent("macos")
+    .appendingPathComponent("appearances")
+    .appendingPathComponent("default.png")
+let windowsOriginalIconURL = outputDirectory
+    .appendingPathComponent("windows")
+    .appendingPathComponent("source.png")
 
 guard let mark = NSImage(contentsOf: markURL) else {
     fatalError("Could not load Ninja Launcher mark at \(markURL.path)")
@@ -42,7 +49,21 @@ func drawIcon(size: Int = 1024, drawing: () -> Void) -> NSBitmapImageRep {
     return result
 }
 
-func drawMark(in rect: NSRect) {
+func drawMark(in rect: NSRect, colors: [NSColor]? = nil) {
+    guard let colors else {
+        mark.draw(
+            in: rect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+        return
+    }
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
     mark.draw(
         in: rect,
         from: .zero,
@@ -51,18 +72,38 @@ func drawMark(in rect: NSRect) {
         respectFlipped: true,
         hints: [.interpolation: NSImageInterpolation.high]
     )
+    NSGraphicsContext.current?.cgContext.setBlendMode(.sourceIn)
+    NSGradient(colors: colors)!.draw(in: rect, angle: -90)
+    NSGraphicsContext.current?.cgContext.endTransparencyLayer()
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+func write(_ image: NSBitmapImageRep, to url: URL) {
+    guard let data = image.representation(using: .png, properties: [:]) else {
+        fatalError("Could not encode \(url.lastPathComponent)")
+    }
+    try! data.write(to: url, options: .atomic)
 }
 
 func write(_ image: NSBitmapImageRep, named filename: String) {
-    guard let data = image.representation(using: .png, properties: [:]) else {
-        fatalError("Could not encode \(filename)")
-    }
-    try! data.write(to: outputDirectory.appendingPathComponent(filename), options: .atomic)
+    write(image, to: outputDirectory.appendingPathComponent(filename))
 }
 
-let macIcon = drawIcon {
-    let tile = NSRect(x: 78, y: 78, width: 868, height: 868)
-    let shape = NSBezierPath(roundedRect: tile, xRadius: 190, yRadius: 190)
+func drawPlatformTile(
+    tile: NSRect,
+    radius: CGFloat,
+    markRect: NSRect,
+    background: [NSColor] = [
+        NSColor(red: 0.025, green: 0.12, blue: 0.29, alpha: 1),
+        NSColor(red: 0.006, green: 0.025, blue: 0.075, alpha: 1),
+    ],
+    markColors: [NSColor] = [
+        NSColor(calibratedWhite: 1, alpha: 1),
+        NSColor(calibratedWhite: 0.88, alpha: 1),
+    ],
+    border: NSColor = NSColor(red: 0.11, green: 0.73, blue: 0.94, alpha: 0.28)
+) {
+    let shape = NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius)
 
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
@@ -76,22 +117,47 @@ let macIcon = drawIcon {
 
     NSGraphicsContext.saveGraphicsState()
     shape.addClip()
-    let gradient = NSGradient(colors: [
-        NSColor(red: 0.025, green: 0.12, blue: 0.29, alpha: 1),
-        NSColor(red: 0.006, green: 0.025, blue: 0.075, alpha: 1),
-    ])!
+    let gradient = NSGradient(colors: background)!
     gradient.draw(in: tile, angle: -90)
-    drawMark(in: NSRect(x: 168, y: 246, width: 688, height: 518))
+    drawMark(in: markRect, colors: markColors)
     NSGraphicsContext.restoreGraphicsState()
 
-    NSColor(red: 0.11, green: 0.73, blue: 0.94, alpha: 0.28).setStroke()
+    border.setStroke()
     shape.lineWidth = 4
     shape.stroke()
 }
 
-let windowsIcon = drawIcon {
-    drawMark(in: NSRect(x: 62, y: 173, width: 900, height: 678))
+let requestedPlatform = CommandLine.arguments.dropFirst().first
+if requestedPlatform != "--windows-only" {
+    guard FileManager.default.fileExists(atPath: macOSDefaultIconURL.path) else {
+        fatalError("Missing exported macOS default icon at \(macOSDefaultIconURL.path)")
+    }
+    let originalDefaultIcon = try Data(contentsOf: macOSDefaultIconURL)
+    try originalDefaultIcon.write(
+        to: outputDirectory.appendingPathComponent("macos-icon-source.png"),
+        options: .atomic
+    )
 }
-
-write(macIcon, named: "macos-icon-source.png")
-write(windowsIcon, named: "windows-icon-source.png")
+if requestedPlatform != "--macos-only" {
+    guard FileManager.default.fileExists(atPath: windowsOriginalIconURL.path) else {
+        fatalError("Missing original Windows icon at \(windowsOriginalIconURL.path)")
+    }
+    guard let originalWindowsIcon = NSImage(contentsOf: windowsOriginalIconURL) else {
+        fatalError("Could not load original Windows icon at \(windowsOriginalIconURL.path)")
+    }
+    let windowsIcon = drawIcon {
+        let canvas = NSRect(x: 0, y: 0, width: 1024, height: 1024)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: canvas, xRadius: 286, yRadius: 286).addClip()
+        originalWindowsIcon.draw(
+            in: canvas,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+        NSGraphicsContext.restoreGraphicsState()
+    }
+    write(windowsIcon, named: "windows-icon-source.png")
+}

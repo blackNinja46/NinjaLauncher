@@ -1,5 +1,8 @@
 use crate::storage::paths::PathManager;
-use crate::{control_api, control_api::ClientBootstrap};
+use crate::{
+    control_api,
+    control_api::{ClientBootstrap, CrashReportSubmission},
+};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -61,4 +64,11 @@ pub async fn record_client_event(
     minecraft_version: Option<String>,
 ) -> Result<(), crate::error::CommandError> {
     control_api::record_event(&event_type, minecraft_version.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn upload_crash_report(
+    report: CrashReportSubmission,
+) -> Result<(), crate::error::CommandError> {
+    control_api::upload_crash_report(&report).await
 }

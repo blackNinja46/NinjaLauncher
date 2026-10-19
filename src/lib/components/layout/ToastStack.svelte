@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fly } from "svelte/transition";
   import Icon from "$lib/components/ui/Icon.svelte";
+  import InlineMessage from "$lib/components/ui/InlineMessage.svelte";
 
   type ToastTone = "info" | "success" | "warning" | "error";
   type ToastItem = {
@@ -65,7 +66,7 @@
       <div class="min-w-0 flex-1">
         <h2 class="text-xs font-bold">{item.title}</h2>
         <p class="mt-1 text-[11px] leading-[1.55] text-[var(--color-text-muted)]">
-          {item.message}
+          <InlineMessage message={item.message} />
         </p>
       </div>
       <button

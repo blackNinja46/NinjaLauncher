@@ -6,6 +6,9 @@ use std::io::Write;
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherSettings {
+    pub setup_complete: bool,
+    pub installation_path: Option<String>,
+    pub terms_accepted_at: Option<String>,
     pub allocated_memory_mb: u32,
     pub java_path: Option<String>,
     pub download_concurrency: u8,
@@ -15,6 +18,10 @@ pub struct LauncherSettings {
     pub show_snapshots: bool,
     pub language: String,
     pub theme: Theme,
+    pub animations_enabled: bool,
+    pub parallax_enabled: bool,
+    pub halloween_theme_enabled: bool,
+    pub halloween_sounds_enabled: bool,
     pub check_for_updates: bool,
     pub discord_rich_presence: bool,
     pub share_anonymous_usage_data: bool,
@@ -31,6 +38,9 @@ pub enum Theme {
 impl Default for LauncherSettings {
     fn default() -> Self {
         Self {
+            setup_complete: false,
+            installation_path: None,
+            terms_accepted_at: None,
             allocated_memory_mb: 4096,
             java_path: None,
             download_concurrency: 4,
@@ -40,6 +50,10 @@ impl Default for LauncherSettings {
             show_snapshots: false,
             language: "en".into(),
             theme: Theme::Dark,
+            animations_enabled: true,
+            parallax_enabled: true,
+            halloween_theme_enabled: true,
+            halloween_sounds_enabled: true,
             check_for_updates: true,
             discord_rich_presence: true,
             share_anonymous_usage_data: false,
@@ -107,5 +121,7 @@ mod tests {
         assert!(!settings.show_snapshots);
         assert!(settings.discord_rich_presence);
         assert!(!settings.share_anonymous_usage_data);
+        assert!(settings.halloween_theme_enabled);
+        assert!(settings.halloween_sounds_enabled);
     }
 }
