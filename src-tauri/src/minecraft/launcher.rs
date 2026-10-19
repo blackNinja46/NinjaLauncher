@@ -9,6 +9,7 @@ use crate::{
     minecraft::metadata::{self, AssetIndex, Download, Library, VersionManifest, VersionMetadata},
     minecraft::processes::GameProcesses,
     modrinth::{client::ModrinthClient, resolver},
+    process::hide_tokio_console,
     storage::{config, paths::PathManager},
 };
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,9 @@ pub struct LaunchStatus {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GameLogLine {
+    instance_id: String,
     stream: &'static str,
     line: String,
 }
@@ -92,30 +95,44 @@ pub async fn launch(
         .user_agent(concat!("NinjaLauncher/", env!("CARGO_PKG_VERSION")))
         .build()?;
 
-    emit(&app, "mods", "Resolving compatible mods and dependencies");
-    sync_mods(
-        &app,
-        paths,
-        modrinth,
-        &client,
-        &instance,
-        settings.download_concurrency as usize,
-    )
-    .await?;
+    if instance.loader == "fabric" {
+        emit(&app, "mods", "Resolving compatible mods and dependencies");
+        sync_mods(
+            &app,
+            paths,
+            modrinth,
+            &client,
+            &instance,
+            settings.download_concurrency as usize,
+        )
+        .await?;
+    }
 
     emit(&app, "minecraft", "Reading Minecraft version metadata");
     let base = minecraft_metadata(&client, paths, &instance.minecraft_version).await?;
-    let fabric = fabric::profile(
-        &client,
-        &instance.minecraft_version,
-        &instance.loader_version,
-    )
-    .await?;
+    let fabric = if instance.loader == "fabric" {
+        Some(
+            fabric::profile(
+                &client,
+                &instance.minecraft_version,
+                &instance.loader_version,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let required_java = base
         .java_version
         .as_ref()
         .map(|version| version.major_version)
         .unwrap_or(8);
+    let java_arch = java_architecture_for(&base);
+    let metadata_arch = match java_arch {
+        Some("aarch64") => "arm64",
+        Some("x64") => "x86_64",
+        _ => metadata::current_arch(),
+    };
     emit(
         &app,
         "java",
@@ -126,20 +143,18 @@ pub async fn launch(
         paths,
         settings.java_path.as_deref(),
         required_java,
+        java_arch,
     )
     .await?;
 
-    emit(
-        &app,
-        "downloads",
-        "Downloading Minecraft libraries and assets",
-    );
+    emit(&app, "downloads", "Checking Minecraft libraries and assets");
     let prepared = prepare_game(
         paths,
         &client,
         &instance,
         &base,
-        &fabric,
+        fabric.as_ref(),
+        metadata_arch,
         settings.download_concurrency as usize,
     )
     .await?;
@@ -153,7 +168,8 @@ pub async fn launch(
             instance: &instance,
             account: &account,
             base: &base,
-            fabric: &fabric,
+            fabric: fabric.as_ref(),
+            metadata_arch,
             memory_mb: settings.allocated_memory_mb,
             close_on_launch: settings.close_on_launch,
             reopen_on_exit: settings.reopen_on_exit,
@@ -207,6 +223,70 @@ fn metadata_to_value(metadata: &VersionMetadata) -> serde_json::Value {
     serde_json::json!({"id":metadata.id,"mainClass":metadata.main_class,"assets":metadata.assets})
 }
 
+fn java_architecture_for(base: &VersionMetadata) -> Option<&'static str> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return Some(if base.libraries.iter().any(is_macos_arm64_native) {
+            "aarch64"
+        } else {
+            // LWJGL 2 and early LWJGL 3 releases only ship Intel macOS natives.
+            // Running both Java and the native libraries through Rosetta keeps
+            // those Minecraft versions usable on Apple Silicon.
+            "x64"
+        });
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = base;
+        None
+    }
+}
+
+fn library_has_marker(library: &Library, marker: &str) -> bool {
+    library.name.contains(marker)
+        || library.natives.values().any(|value| value.contains(marker))
+        || library.downloads.as_ref().is_some_and(|downloads| {
+            downloads.artifact.as_ref().is_some_and(|download| {
+                download.url.contains(marker)
+                    || download
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| path.contains(marker))
+            }) || downloads.classifiers.iter().any(|(name, download)| {
+                name.contains(marker)
+                    || download.url.contains(marker)
+                    || download
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| path.contains(marker))
+            })
+        })
+}
+
+fn library_identity_has_marker(library: &Library, marker: &str) -> bool {
+    library.name.contains(marker)
+        || library.downloads.as_ref().is_some_and(|downloads| {
+            downloads.artifact.as_ref().is_some_and(|download| {
+                download.url.contains(marker)
+                    || download
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| path.contains(marker))
+            })
+        })
+}
+
+fn is_macos_arm64_native(library: &Library) -> bool {
+    library_has_marker(library, "natives-macos-arm64")
+        || library_has_marker(library, "natives-osx-arm64")
+}
+
+fn is_generic_macos_native(library: &Library) -> bool {
+    !is_macos_arm64_native(library)
+        && (library_identity_has_marker(library, "natives-macos")
+            || library_identity_has_marker(library, "natives-osx"))
+}
+
 struct PreparedGame {
     classpath: Vec<PathBuf>,
     natives: PathBuf,
@@ -219,7 +299,8 @@ async fn prepare_game(
     client: &reqwest::Client,
     instance: &InstanceConfig,
     base: &VersionMetadata,
-    fabric: &VersionMetadata,
+    fabric: Option<&VersionMetadata>,
+    metadata_arch: &str,
     concurrency: usize,
 ) -> Result<PreparedGame, CommandError> {
     let shared = paths.shared_dir();
@@ -238,12 +319,28 @@ async fn prepare_game(
     let mut downloads = vec![spec(&client_download, client_jar.clone())];
     let mut classpath = Vec::new();
     let mut native_archives = Vec::new();
-    let libraries = base.libraries.iter().chain(fabric.libraries.iter());
-    for library in libraries {
-        if !metadata::applies(&library.rules) {
+    let has_native_arm64 = metadata_arch == "arm64"
+        && base
+            .libraries
+            .iter()
+            .chain(fabric.into_iter().flat_map(|item| item.libraries.iter()))
+            .any(is_macos_arm64_native);
+    let libraries = base
+        .libraries
+        .iter()
+        .map(|library| (library, "https://libraries.minecraft.net/"))
+        .chain(fabric.into_iter().flat_map(|item| {
+            item.libraries
+                .iter()
+                .map(|library| (library, "https://maven.fabricmc.net/"))
+        }));
+    for (library, fallback_repository) in libraries {
+        if !metadata::applies_for_arch(&library.rules, metadata_arch)
+            || (has_native_arm64 && is_generic_macos_native(library))
+        {
             continue;
         }
-        if let Some(artifact) = library_artifact(library)? {
+        if let Some(artifact) = library_artifact(library, fallback_repository)? {
             let fallback = maven_path(&library.name);
             let path = safe_join(
                 &libraries_root,
@@ -254,9 +351,18 @@ async fn prepare_game(
         }
         if let Some(classifier) = library.natives.get(metadata::current_os()) {
             if let Some(details) = library.downloads.as_ref().and_then(|downloads| {
-                downloads
-                    .classifiers
-                    .get(&classifier.replace("${arch}", "64"))
+                let generic = classifier.replace("${arch}", "64");
+                if metadata_arch == "arm64" {
+                    let arm = classifier.replace("${arch}", "arm64");
+                    let suffixed_arm = format!("{generic}-arm64");
+                    downloads
+                        .classifiers
+                        .get(&arm)
+                        .or_else(|| downloads.classifiers.get(&suffixed_arm))
+                        .or_else(|| downloads.classifiers.get(&generic))
+                } else {
+                    downloads.classifiers.get(&generic)
+                }
             }) {
                 let fallback = maven_path(&library.name);
                 let path = safe_join(
@@ -290,8 +396,11 @@ async fn prepare_game(
         });
         manager::download_all(client, downloads, concurrency).await?;
         let index: AssetIndex = serde_json::from_slice(&tokio::fs::read(index_path).await?)?;
+        let virtual_assets = index.virtual_;
+        let map_to_resources = index.map_to_resources;
         let mut asset_downloads = Vec::with_capacity(index.objects.len());
-        for object in index.objects.into_values() {
+        let mut asset_mappings = Vec::with_capacity(index.objects.len());
+        for (logical_name, object) in index.objects {
             if object.hash.len() != 40
                 || !object
                     .hash
@@ -303,23 +412,50 @@ async fn prepare_game(
                 ));
             }
             let prefix = &object.hash[..2];
-            asset_downloads.push(DownloadSpec {
-                url: format!(
-                    "https://resources.download.minecraft.net/{prefix}/{}",
-                    object.hash
-                ),
-                path: assets_root.join("objects").join(prefix).join(&object.hash),
-                sha1: Some(object.hash),
-                sha256: None,
-                sha512: None,
-            });
+            let path = assets_root.join("objects").join(prefix).join(&object.hash);
+            let already_downloaded = object.size > 0
+                && tokio::fs::metadata(&path)
+                    .await
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() == object.size);
+            if !already_downloaded {
+                asset_downloads.push(DownloadSpec {
+                    url: format!(
+                        "https://resources.download.minecraft.net/{prefix}/{}",
+                        object.hash
+                    ),
+                    path: path.clone(),
+                    sha1: Some(object.hash),
+                    sha256: None,
+                    sha512: None,
+                });
+            }
+            if virtual_assets || map_to_resources {
+                asset_mappings.push((logical_name, path, object.size));
+            }
         }
         manager::download_all(client, asset_downloads, concurrency).await?;
+        if virtual_assets {
+            materialize_assets(
+                &asset_mappings,
+                &assets_root.join("virtual").join(&asset_ref.id),
+            )
+            .await?;
+        }
+        if map_to_resources {
+            materialize_assets(
+                &asset_mappings,
+                &instance_manager::instance_dir(paths, &instance.id)?.join("resources"),
+            )
+            .await?;
+        }
     } else {
         manager::download_all(client, downloads, concurrency).await?;
     }
     classpath.push(client_jar);
     let natives = shared.join("natives").join(&instance.id);
+    if natives.exists() {
+        tokio::fs::remove_dir_all(&natives).await?;
+    }
     tokio::fs::create_dir_all(&natives).await?;
     for (archive, extract) in native_archives {
         extract_natives(
@@ -366,7 +502,36 @@ async fn prepare_game(
     })
 }
 
-fn library_artifact(library: &Library) -> Result<Option<Download>, CommandError> {
+async fn materialize_assets(
+    assets: &[(String, PathBuf, u64)],
+    target: &Path,
+) -> Result<(), CommandError> {
+    for (logical_name, source, size) in assets {
+        let destination = safe_join(target, logical_name)?;
+        if *size > 0
+            && tokio::fs::metadata(&destination)
+                .await
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() == *size)
+        {
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        if tokio::fs::symlink_metadata(&destination).await.is_ok() {
+            tokio::fs::remove_file(&destination).await?;
+        }
+        if tokio::fs::hard_link(source, &destination).await.is_err() {
+            tokio::fs::copy(source, &destination).await?;
+        }
+    }
+    Ok(())
+}
+
+fn library_artifact(
+    library: &Library,
+    fallback_repository: &str,
+) -> Result<Option<Download>, CommandError> {
     if let Some(downloads) = &library.downloads {
         return Ok(downloads.artifact.clone());
     }
@@ -374,10 +539,7 @@ fn library_artifact(library: &Library) -> Result<Option<Download>, CommandError>
         return Ok(None);
     }
     let path = maven_path(&library.name);
-    let base = library
-        .url
-        .as_deref()
-        .unwrap_or("https://maven.fabricmc.net/");
+    let base = library.url.as_deref().unwrap_or(fallback_repository);
     Ok(Some(Download {
         url: format!("{}{path}", base.trim_end_matches('/').to_string() + "/"),
         sha1: None,
@@ -566,7 +728,8 @@ struct ProcessInputs<'a> {
     instance: &'a InstanceConfig,
     account: &'a microsoft::Account,
     base: &'a VersionMetadata,
-    fabric: &'a VersionMetadata,
+    fabric: Option<&'a VersionMetadata>,
+    metadata_arch: &'a str,
     memory_mb: u32,
     close_on_launch: bool,
     reopen_on_exit: bool,
@@ -586,6 +749,7 @@ async fn start_process(
         account,
         base,
         fabric,
+        metadata_arch,
         memory_mb,
         close_on_launch,
         reopen_on_exit,
@@ -632,8 +796,13 @@ async fn start_process(
             .iter()
             .fold(value, |text, (from, to)| text.replace(from, to))
     };
-    let mut jvm = metadata::expand_arguments(&base.arguments.jvm);
-    jvm.extend(metadata::expand_arguments(&fabric.arguments.jvm));
+    let mut jvm = metadata::expand_arguments_for_arch(&base.arguments.jvm, metadata_arch);
+    if let Some(fabric) = fabric {
+        jvm.extend(metadata::expand_arguments_for_arch(
+            &fabric.arguments.jvm,
+            metadata_arch,
+        ));
+    }
     if jvm.is_empty() {
         jvm.extend([
             format!("-Djava.library.path={}", prepared.natives.to_string_lossy()),
@@ -648,9 +817,14 @@ async fn start_process(
     let mut game = if let Some(legacy) = &base.minecraft_arguments {
         legacy.split_whitespace().map(String::from).collect()
     } else {
-        metadata::expand_arguments(&base.arguments.game)
+        metadata::expand_arguments_for_arch(&base.arguments.game, metadata_arch)
     };
-    game.extend(metadata::expand_arguments(&fabric.arguments.game));
+    if let Some(fabric) = fabric {
+        game.extend(metadata::expand_arguments_for_arch(
+            &fabric.arguments.game,
+            metadata_arch,
+        ));
+    }
     if demo && !game.iter().any(|argument| argument == "--demo") {
         game.push("--demo".into());
     }
@@ -659,11 +833,14 @@ async fn start_process(
         game.push(address.into());
     }
     let mut command = tokio::process::Command::new(java);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_tokio_console(&mut command);
     command
         .args(jvm.into_iter().map(&replace))
-        .arg(&fabric.main_class)
+        .arg(
+            fabric
+                .map(|metadata| metadata.main_class.as_str())
+                .unwrap_or(base.main_class.as_str()),
+        )
         .args(game.into_iter().map(replace))
         .current_dir(&game_dir)
         .stdout(Stdio::piped())
@@ -688,6 +865,7 @@ async fn start_process(
     }
     if let Some(stdout) = child.stdout.take() {
         let app = app.clone();
+        let instance_id = instance.id.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -697,6 +875,7 @@ async fn start_process(
                 app.emit(
                     "launcher://log",
                     GameLogLine {
+                        instance_id: instance_id.clone(),
                         stream: "stdout",
                         line,
                     },
@@ -707,6 +886,7 @@ async fn start_process(
     }
     if let Some(stderr) = child.stderr.take() {
         let app = app.clone();
+        let instance_id = instance.id.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -716,6 +896,7 @@ async fn start_process(
                 app.emit(
                     "launcher://log",
                     GameLogLine {
+                        instance_id: instance_id.clone(),
                         stream: "stderr",
                         line,
                     },
@@ -965,6 +1146,37 @@ mod tests {
         assert!(safe_join(root, "org/example/library.jar").is_ok());
         assert!(safe_join(root, "../../account.json").is_err());
         assert!(safe_join(root, "/absolute/file.jar").is_err());
+    }
+
+    #[test]
+    fn legacy_vanilla_libraries_use_mojangs_repository() {
+        let library = Library {
+            name: "org.example:legacy-library:1.0".into(),
+            ..Library::default()
+        };
+        let download = library_artifact(&library, "https://libraries.minecraft.net/")
+            .expect("valid library")
+            .expect("download");
+        assert_eq!(
+            download.url,
+            "https://libraries.minecraft.net/org/example/legacy-library/1.0/legacy-library-1.0.jar"
+        );
+    }
+
+    #[test]
+    fn distinguishes_intel_and_arm_macos_natives() {
+        let intel = Library {
+            name: "org.lwjgl:lwjgl:3.3.1:natives-macos".into(),
+            ..Library::default()
+        };
+        let arm = Library {
+            name: "org.lwjgl:lwjgl:3.3.1:natives-macos-arm64".into(),
+            ..Library::default()
+        };
+        assert!(is_generic_macos_native(&intel));
+        assert!(!is_macos_arm64_native(&intel));
+        assert!(is_macos_arm64_native(&arm));
+        assert!(!is_generic_macos_native(&arm));
     }
 
     #[test]

@@ -151,6 +151,14 @@ struct Entitlements {
 struct MinecraftProfile {
     id: String,
     name: String,
+    #[serde(default)]
+    capes: Vec<MinecraftCape>,
+}
+
+#[derive(Deserialize)]
+struct MinecraftCape {
+    url: String,
+    state: Option<String>,
 }
 
 pub async fn begin() -> Result<DeviceCode, CommandError> {
@@ -325,6 +333,65 @@ pub fn load(paths: &PathManager) -> Result<Option<Account>, CommandError> {
     Ok(load_store(paths)?.active().cloned())
 }
 
+// Refresh credentials without changing whichever account is currently selected.
+pub async fn authenticated_account(
+    paths: &PathManager,
+    uuid: &str,
+) -> Result<Account, CommandError> {
+    let mut account = load(paths)?
+        .filter(|account| account.uuid.eq_ignore_ascii_case(uuid))
+        .ok_or_else(|| {
+            CommandError::new("Das Minecraft-Konto wurde gewechselt. Bitte erneut versuchen.")
+        })?;
+    if account.expires_at <= now() + 60 {
+        if account.refresh_token.is_empty() {
+            return Err(CommandError::new("Bitte erneut bei Microsoft anmelden."));
+        }
+        account = refresh(&account.refresh_token).await?;
+        if !account.uuid.eq_ignore_ascii_case(uuid) {
+            return Err(CommandError::new(
+                "Die erneute Anmeldung lieferte ein anderes Konto.",
+            ));
+        }
+        let mut store = load_store(paths)?;
+        if let Some(existing) = store
+            .accounts
+            .iter_mut()
+            .find(|item| item.uuid == account.uuid)
+        {
+            *existing = account.clone();
+            write_store(paths, &store)?;
+        } else {
+            return Err(CommandError::new("Das Minecraft-Konto wurde entfernt."));
+        }
+    }
+    Ok(account)
+}
+
+pub async fn cape_url(paths: &PathManager, uuid: &str) -> Result<Option<String>, CommandError> {
+    let account = authenticated_account(paths, uuid).await?;
+    let profile: MinecraftProfile = reqwest::Client::new()
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .bearer_auth(&account.access_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(profile
+        .capes
+        .into_iter()
+        .find(|cape| cape.state.as_deref().is_none_or(|state| state == "ACTIVE"))
+        .and_then(|cape| {
+            reqwest::Url::parse(&cape.url)
+                .ok()
+                .filter(|url| {
+                    url.scheme() == "https" && url.host_str() == Some("textures.minecraft.net")
+                })
+                .map(|_| cape.url)
+        }))
+}
+
 pub fn save(paths: &PathManager, account: &Account) -> Result<(), CommandError> {
     let mut store = load_store(paths)?;
     if let Some(existing) = store
@@ -420,7 +487,7 @@ pub fn now() -> u64 {
 mod tests {
     use super::{
         client_id, load, minecraft_login_error, remove_account, save, state, switch_account,
-        Account,
+        Account, MinecraftProfile,
     };
     use crate::storage::paths::PathManager;
 
@@ -445,6 +512,16 @@ mod tests {
     #[test]
     fn bundled_client_id_is_a_valid_uuid() {
         uuid::Uuid::parse_str(client_id()).expect("bundled Microsoft client ID should be a UUID");
+    }
+
+    #[test]
+    fn reads_active_cape_from_minecraft_profile() {
+        let profile: MinecraftProfile = serde_json::from_str(
+            r#"{"id":"player-id","name":"Ninja","capes":[{"id":"cape-id","state":"ACTIVE","url":"https://textures.minecraft.net/texture/cape"}]}"#,
+        )
+        .expect("Minecraft profile with cape");
+        assert_eq!(profile.capes.len(), 1);
+        assert_eq!(profile.capes[0].state.as_deref(), Some("ACTIVE"));
     }
 
     #[test]

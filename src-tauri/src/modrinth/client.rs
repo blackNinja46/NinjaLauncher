@@ -40,6 +40,55 @@ impl ModrinthClient {
             .await
     }
 
+    pub async fn search_content(
+        &self,
+        query: &str,
+        game_version: &str,
+        project_type: &str,
+        offset: u32,
+    ) -> Result<SearchResponse, CommandError> {
+        self.search_projects_without_loader(query, Some(game_version), project_type, offset)
+            .await
+    }
+
+    pub async fn search_launcher_content(
+        &self,
+        query: &str,
+        game_version: &str,
+        offset: u32,
+        index: &str,
+    ) -> Result<SearchResponse, CommandError> {
+        let facets = serde_json::to_string(&vec![
+            vec![
+                "categories:fabric",
+                "project_type:resourcepack",
+                "project_type:shader",
+            ],
+            vec![&format!("versions:{game_version}")],
+        ])?;
+        let offset = offset.to_string();
+        let response = self
+            .0
+            .get(format!("{API}/search"))
+            .query(&[
+                ("query", query),
+                ("facets", &facets),
+                ("limit", "20"),
+                ("offset", &offset),
+                ("index", index),
+            ])
+            .send()
+            .await?
+            .error_for_status()?;
+        let mut result: SearchResponse = response.json().await?;
+        result.hits.retain(|hit| {
+            matches!(hit.project_type.as_str(), "resourcepack" | "shader")
+                || (hit.project_type == "mod"
+                    && hit.categories.iter().any(|value| value == "fabric"))
+        });
+        Ok(result)
+    }
+
     async fn search_projects(
         &self,
         query: &str,
@@ -52,6 +101,35 @@ impl ModrinthClient {
             vec![format!("project_type:{project_type}")],
             vec![format!("categories:{loader}")],
         ];
+        if let Some(game_version) = game_version {
+            facets.push(vec![format!("versions:{game_version}")]);
+        }
+        let facets = serde_json::to_string(&facets)?;
+        let offset = offset.to_string();
+        let response = self
+            .0
+            .get(format!("{API}/search"))
+            .query(&[
+                ("query", query),
+                ("facets", &facets),
+                ("limit", "20"),
+                ("offset", &offset),
+                ("index", "relevance"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(response.json().await?)
+    }
+
+    async fn search_projects_without_loader(
+        &self,
+        query: &str,
+        game_version: Option<&str>,
+        project_type: &str,
+        offset: u32,
+    ) -> Result<SearchResponse, CommandError> {
+        let mut facets = vec![vec![format!("project_type:{project_type}")]];
         if let Some(game_version) = game_version {
             facets.push(vec![format!("versions:{game_version}")]);
         }
@@ -89,6 +167,25 @@ impl ModrinthClient {
             .0
             .get(format!("{API}/project/{project_id}/version"))
             .query(&[("game_versions", game_versions), ("loaders", loaders)])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(response.json().await?)
+    }
+
+    pub async fn versions_for_game(
+        &self,
+        project_id: &str,
+        game_version: &str,
+    ) -> Result<Vec<ProjectVersion>, CommandError> {
+        let game_versions = serde_json::to_string(&[game_version])?;
+        let response = self
+            .0
+            .get(format!("{API}/project/{project_id}/version"))
+            .query(&[
+                ("game_versions", game_versions),
+                ("include_changelog", "false".into()),
+            ])
             .send()
             .await?
             .error_for_status()?;
@@ -168,6 +265,7 @@ pub struct SearchResponse {
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct SearchHit {
     pub project_id: String,
+    pub project_type: String,
     pub slug: String,
     pub title: String,
     pub description: String,
@@ -185,6 +283,33 @@ pub struct ProjectDetails {
     pub slug: String,
     pub title: String,
     pub icon_url: Option<String>,
+    #[serde(default)]
+    pub project_type: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub downloads: u64,
+    #[serde(default)]
+    pub followers: u64,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub gallery: Vec<ProjectGalleryImage>,
+    #[serde(default)]
+    pub published: String,
+    #[serde(default)]
+    pub updated: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ProjectGalleryImage {
+    pub url: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -255,6 +380,7 @@ mod tests {
             r#"{
                 "hits": [{
                     "project_id": "AANobbMI",
+                    "project_type": "mod",
                     "slug": "sodium",
                     "title": "Sodium",
                     "description": "Rendering engine",
@@ -272,6 +398,7 @@ mod tests {
         assert_eq!(response.hits[0].project_id, "AANobbMI");
         let frontend = serde_json::to_value(response).expect("response should serialize");
         assert_eq!(frontend["hits"][0]["projectId"], "AANobbMI");
+        assert_eq!(frontend["hits"][0]["projectType"], "mod");
         assert_eq!(
             frontend["hits"][0]["iconUrl"],
             "https://cdn.modrinth.com/icon.webp"

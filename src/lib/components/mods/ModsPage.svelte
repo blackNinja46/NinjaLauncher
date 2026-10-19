@@ -1,29 +1,44 @@
 <script lang="ts">
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
+  import ModrinthProjectDialog from "$lib/components/mods/ModrinthProjectDialog.svelte";
   import Icon from "$lib/components/ui/Icon.svelte";
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import Pagination from "$lib/components/ui/Pagination.svelte";
-  import { untrack } from "svelte";
+  import Toggle from "$lib/components/ui/Toggle.svelte";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { onMount, untrack } from "svelte";
   import {
     addMod,
+    addLocalModFile,
     analyzeModConflicts,
     getModDetails,
     getInstalledModVersions,
+    listInstalledModFiles,
+    installProfileContent,
+    listProfileContent,
+    listProfileContentVersions,
     listModVersions,
     messageFromError,
     removeMod,
-    refreshImportedModpackMods,
-    searchMods,
+    removeLocalModFile,
+    removeProfileContent,
+    refreshModpackMods,
+    searchLauncherContent,
+    setProfileContentEnabled,
+    setLocalModEnabled,
     setModEnabled,
     setModVersion,
   } from "$lib/api/tauri";
+  import type { ModrinthSearchIndex } from "$lib/api/tauri";
   import type {
+    InstalledModFile,
     LauncherInstance,
     ModConflictReport,
     ModrinthHit,
     ModrinthProject,
     ModrinthVersion,
+    ProfileContentFile,
+    ProfileContentKind,
     SupportedVersion,
   } from "$lib/types";
 
@@ -32,11 +47,17 @@
     versions,
     onchanged,
     onversionchange,
+    onnotify,
   }: {
     instance: LauncherInstance;
     versions: SupportedVersion[];
     onchanged: () => Promise<void>;
     onversionchange: (version: string) => Promise<void>;
+    onnotify: (notification: {
+      title: string;
+      message: string;
+      tone: "info" | "success" | "warning" | "error";
+    }) => void;
   } = $props();
   let view = $state<"installed" | "search">("installed");
   let query = $state("");
@@ -59,6 +80,7 @@
   let loading = $state(false);
   let error = $state("");
   let searched = $state(false);
+  let searchIndex = $state<ModrinthSearchIndex>("relevance");
   let page = $state(0);
   let total = $state(0);
   let searchRequest = 0;
@@ -66,18 +88,115 @@
   let changingMinecraftVersion = $state(false);
   let installedVersionIds = $state<Record<string, string>>({});
   let installedVersionsKey = $state("");
+  let installedModFiles = $state<InstalledModFile[]>([]);
+  let installedModFilesKey = $state("");
+  let modDropActive = $state(false);
+  let importingDroppedMods = $state(false);
+  let installedProfileContent = $state<(ProfileContentFile & { kind: ProfileContentKind })[]>([]);
+  let installedContentKey = $state("");
+  let installedFilter = $state<"all" | "mods" | ProfileContentKind>("all");
+  let installedQuery = $state("");
   let updatingProjectId = $state("");
   let versionInfoOpen = $state(false);
-  let refreshedImportedPackId = $state("");
+  let versionInfoLayer = $state<HTMLDivElement>();
+  let refreshedPackId = $state("");
   let searchContext = $state("");
+  let selectedProject = $state<ModrinthHit | null>(null);
+  let selectedProjectDetails = $state<ModrinthProject | null>(null);
+  let lastErrorNotification = $state("");
+  let incompatibilityNotificationKey = $state("");
   let installed = $derived(new Set(instance.mods.map((mod) => mod.projectId)));
+  let installedContent = $derived(
+    new Map(
+      installedProfileContent
+        .filter((file) => file.projectId)
+        .map((file) => [file.projectId as string, file]),
+    ),
+  );
   let installedMods = $derived(
     [...instance.mods].sort((left, right) => left.name.localeCompare(right.name)),
   );
   let packMods = $derived(instance.modpack?.packMods ?? []);
-  let incompatibleCount = $derived(
-    installedMods.filter((mod) => modEnabled(mod) && compatibilityFor(mod).state === "incompatible")
-      .length,
+  let packInstalled = $derived(
+    new Set(packMods.flatMap((mod) => (mod.projectId ? [mod.projectId] : []))),
+  );
+  let selectedPackMod = $derived(
+    selectedProject
+      ? (packMods.find((mod) => mod.projectId === selectedProject?.projectId) ?? null)
+      : null,
+  );
+  let unmanagedInstalledMods = $derived(
+    installedModFiles
+      .filter(
+        (file) =>
+          file.local ||
+          (instance.modpack === undefined &&
+            (!file.projectId ||
+              (!installed.has(file.projectId) && !packInstalled.has(file.projectId)))),
+      )
+      .sort((left, right) =>
+        (left.projectId ? (details[left.projectId]?.title ?? left.name) : left.name).localeCompare(
+          right.projectId ? (details[right.projectId]?.title ?? right.name) : right.name,
+        ),
+      ),
+  );
+  let selectedManagedDependency = $derived(
+    selectedProject
+      ? (unmanagedInstalledMods.find(
+          (mod) => mod.projectId && mod.projectId === selectedProject?.projectId,
+        ) ?? null)
+      : null,
+  );
+  let normalizedInstalledQuery = $derived(installedQuery.trim().toLocaleLowerCase());
+  let filteredProfileContent = $derived(
+    installedProfileContent.filter(
+      (file) =>
+        (installedFilter === "all" || installedFilter === file.kind) &&
+        (!normalizedInstalledQuery ||
+          `${file.name} ${file.fileName} ${file.projectId ?? ""}`
+            .toLocaleLowerCase()
+            .includes(normalizedInstalledQuery)),
+    ),
+  );
+  let showInstalledMods = $derived(installedFilter === "all" || installedFilter === "mods");
+  let filteredPackMods = $derived(
+    packMods.filter(
+      (mod) =>
+        !normalizedInstalledQuery ||
+        `${mod.name} ${mod.projectId ?? ""} ${mod.versionName}`
+          .toLocaleLowerCase()
+          .includes(normalizedInstalledQuery),
+    ),
+  );
+  let filteredInstalledMods = $derived(
+    installedMods.filter((mod) => {
+      const project = details[mod.projectId];
+      return (
+        !normalizedInstalledQuery ||
+        `${mod.name} ${mod.projectId} ${project?.title ?? ""} ${project?.slug ?? ""}`
+          .toLocaleLowerCase()
+          .includes(normalizedInstalledQuery)
+      );
+    }),
+  );
+  let filteredUnmanagedInstalledMods = $derived(
+    unmanagedInstalledMods.filter((mod) => {
+      const project = mod.projectId ? details[mod.projectId] : undefined;
+      return (
+        !normalizedInstalledQuery ||
+        `${project?.title ?? ""} ${project?.slug ?? ""} ${mod.name} ${mod.fileName} ${mod.projectId ?? ""} ${mod.versionId ?? ""}`
+          .toLocaleLowerCase()
+          .includes(normalizedInstalledQuery)
+      );
+    }),
+  );
+  let visibleInstalledCount = $derived(
+    filteredProfileContent.length +
+      (showInstalledMods
+        ? filteredInstalledMods.length +
+          filteredPackMods.length +
+          filteredUnmanagedInstalledMods.length
+        : 0),
   );
   let modUpdates = $derived.by(() =>
     installedMods.flatMap((mod) => {
@@ -106,13 +225,98 @@
   );
 
   $effect(() => {
-    const localPackId = instance.modpack?.projectId === "local-import" ? instance.id : "";
-    if (!localPackId || refreshedImportedPackId === localPackId) return;
-    refreshedImportedPackId = localPackId;
-    refreshImportedModpackMods(localPackId)
+    if (error && error !== lastErrorNotification) {
+      onnotify({ title: "Action failed", message: error, tone: "error" });
+    }
+    lastErrorNotification = error;
+  });
+
+  $effect(() => {
+    const versionIds = instance.mods.map((mod) => mod.projectId).sort();
+    const expectedVersionsKey = `${instance.minecraftVersion}:${instance.loader}:${versionIds.join(",")}`;
+    const expectedConflictKey = compatibilityCheckKey();
+    if (
+      loadedVersionsKey !== expectedVersionsKey ||
+      conflictCheckKey !== expectedConflictKey ||
+      checkingConflicts
+    )
+      return;
+    const affected = installedMods
+      .filter((mod) => modEnabled(mod) && compatibilityFor(mod).state === "incompatible")
+      .map((mod) => mod.projectId)
+      .sort();
+    const hasConflict = !conflictReport.compatible;
+    const key =
+      affected.length || hasConflict
+        ? `${instance.id}:${instance.minecraftVersion}:${affected.join(",")}:${conflictReport.message ?? ""}`
+        : "";
+    if (key && key !== incompatibilityNotificationKey) {
+      onnotify({
+        title: affected.length === 1 ? "Incompatible mod" : "Incompatible mods",
+        message:
+          conflictReport.message ??
+          `${affected.length} enabled ${affected.length === 1 ? "mod is" : "mods are"} not compatible with Minecraft ${instance.minecraftVersion}.`,
+        tone: "warning",
+      });
+    }
+    incompatibilityNotificationKey = key;
+  });
+
+  $effect(() => {
+    const packId = instance.modpack && instance.modpack.packMods.length === 0 ? instance.id : "";
+    if (!packId || refreshedPackId === packId) return;
+    refreshedPackId = packId;
+    refreshModpackMods(packId)
       .then(() => onchanged())
       .catch((cause) => (error = messageFromError(cause)));
   });
+
+  $effect(() => {
+    const key = instance.id;
+    if (installedContentKey === key) return;
+    installedContentKey = key;
+    void refreshInstalledContent(key);
+  });
+
+  async function refreshInstalledContent(key = installedContentKey) {
+    try {
+      const [resourcepacks, shaderpacks] = await Promise.all([
+        listProfileContent(instance.id, "resourcepacks"),
+        listProfileContent(instance.id, "shaderpacks"),
+      ]);
+      if (installedContentKey === key) {
+        installedProfileContent = [
+          ...resourcepacks.map((file) => ({ ...file, kind: "resourcepacks" as const })),
+          ...shaderpacks.map((file) => ({ ...file, kind: "shaderpacks" as const })),
+        ];
+      }
+    } catch (cause) {
+      if (installedContentKey === key) error = messageFromError(cause);
+    }
+  }
+
+  $effect(() => {
+    if (view !== "search") return;
+    untrack(() => void refreshInstalledContent());
+  });
+
+  function contentKindFor(project: ModrinthHit): ProfileContentKind | null {
+    if (project.projectType === "resourcepack") return "resourcepacks";
+    if (project.projectType === "shader") return "shaderpacks";
+    return null;
+  }
+
+  function projectTypeLabel(project: ModrinthHit): string {
+    if (project.projectType === "resourcepack") return "Resource pack";
+    if (project.projectType === "shader") return "Shader";
+    return "Mod";
+  }
+
+  function projectTypeIcon(project: ModrinthHit): string {
+    if (project.projectType === "resourcepack") return "palette";
+    if (project.projectType === "shader") return "shader";
+    return "mods";
+  }
 
   $effect(() => {
     const key = `${instance.id}:${instance.minecraftVersion}`;
@@ -126,6 +330,87 @@
       .catch((cause) => {
         if (installedVersionsKey === key) error = messageFromError(cause);
       });
+  });
+
+  $effect(() => {
+    const key = instance.id;
+    if (installedModFilesKey === key) return;
+    installedModFilesKey = key;
+    installedModFiles = [];
+    void refreshInstalledModFiles(key);
+  });
+
+  async function refreshInstalledModFiles(key = installedModFilesKey) {
+    try {
+      const files = await listInstalledModFiles(instance.id);
+      if (installedModFilesKey === key) installedModFiles = files;
+    } catch (cause) {
+      if (installedModFilesKey === key) error = messageFromError(cause);
+    }
+  }
+
+  async function importDroppedMods(paths: string[]) {
+    const jars = paths.filter((path) => path.toLocaleLowerCase().endsWith(".jar"));
+    modDropActive = false;
+    if (!jars.length) {
+      onnotify({
+        title: "Unsupported file",
+        message: "Drop one or more .jar mod files on the Mods page.",
+        tone: "warning",
+      });
+      return;
+    }
+    importingDroppedMods = true;
+    const failures: string[] = [];
+    let imported = 0;
+    for (const path of jars) {
+      try {
+        await addLocalModFile(instance.id, path);
+        imported += 1;
+      } catch (cause) {
+        failures.push(messageFromError(cause));
+      }
+    }
+    await refreshInstalledModFiles();
+    importingDroppedMods = false;
+    if (imported) {
+      onnotify({
+        title: imported === 1 ? "Mod added" : "Mods added",
+        message: `${imported} local ${imported === 1 ? "mod was" : "mods were"} added to ${instance.name}.`,
+        tone: "success",
+      });
+    }
+    if (failures.length) {
+      onnotify({
+        title: "Some mods could not be added",
+        message: failures[0],
+        tone: "error",
+      });
+    }
+  }
+
+  onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          modDropActive = true;
+        } else if (event.payload.type === "leave") {
+          modDropActive = false;
+        } else if (!importingDroppedMods) {
+          void importDroppedMods(event.payload.paths);
+        }
+      })
+      .then((files) => {
+        if (disposed) files();
+        else unlisten = files;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   });
 
   function compatibilityFor(mod: LauncherInstance["mods"][number]): {
@@ -162,8 +447,8 @@
       : Boolean(mod.enabledVersions?.includes(instance.minecraftVersion));
   }
 
-  $effect(() => {
-    const key = `${instance.id}:${instance.minecraftVersion}:${instance.mods
+  function compatibilityCheckKey(): string {
+    return `${instance.id}:${instance.minecraftVersion}:${instance.mods
       .map((mod) =>
         [
           mod.projectId,
@@ -173,6 +458,10 @@
       )
       .sort()
       .join("|")}`;
+  }
+
+  $effect(() => {
+    const key = compatibilityCheckKey();
     if (key === conflictCheckKey) return;
     conflictCheckKey = key;
     checkingConflicts = true;
@@ -205,7 +494,12 @@
   });
 
   $effect(() => {
-    const ids = instance.mods.map((mod) => mod.projectId).sort();
+    const ids = [
+      ...new Set([
+        ...instance.mods.map((mod) => mod.projectId),
+        ...installedModFiles.flatMap((file) => (file.projectId ? [file.projectId] : [])),
+      ]),
+    ].sort();
     const key = ids.join(",");
     if (key === loadedDetailsKey) return;
     loadedDetailsKey = key;
@@ -213,11 +507,14 @@
       details = {};
       return;
     }
-    getModDetails(ids)
-      .then(
-        (projects) =>
-          (details = Object.fromEntries(projects.map((project) => [project.id, project]))),
-      )
+    const chunks = Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) =>
+      ids.slice(index * 100, index * 100 + 100),
+    );
+    Promise.all(chunks.map((chunk) => getModDetails(chunk)))
+      .then((groups) => {
+        if (loadedDetailsKey !== key) return;
+        details = Object.fromEntries(groups.flat().map((project) => [project.id, project]));
+      })
       .catch((cause) => (error = messageFromError(cause)));
   });
 
@@ -252,7 +549,11 @@
     });
   });
 
-  async function loadPage(nextPage: number, searchQuery = query) {
+  async function loadPage(
+    nextPage: number,
+    searchQuery = query,
+    index: ModrinthSearchIndex = searchIndex,
+  ) {
     const request = ++searchRequest;
     loading = true;
     error = "";
@@ -260,11 +561,11 @@
     searchVersionsByProject = {};
     searchVersionSelections = {};
     try {
-      const response = await searchMods(
+      const response = await searchLauncherContent(
         searchQuery,
         instance.minecraftVersion,
-        instance.loader,
         nextPage * 20,
+        index,
       );
       if (request !== searchRequest) return;
       results = response.hits;
@@ -285,19 +586,91 @@
     void loadPage(0);
   }
 
-  async function toggleSearchResult(mod: ModrinthHit) {
+  function changeSearchIndex(value: string | number) {
+    searchIndex = value as ModrinthSearchIndex;
+    void loadPage(0, query, searchIndex);
+  }
+
+  async function toggleSearchResult(project: ModrinthHit) {
+    if (project.projectType === "mod" && packInstalled.has(project.projectId)) return;
     error = "";
-    busyProjectId = mod.projectId;
+    busyProjectId = project.projectId;
     try {
-      if (installed.has(mod.projectId)) await removeMod(instance.id, mod.projectId);
-      else
+      const contentKind = contentKindFor(project);
+      if (contentKind) {
+        const installedFile = await installProfileContent(
+          instance.id,
+          contentKind,
+          project.projectId,
+          searchVersionSelections[project.projectId] || null,
+          project.title,
+          project.iconUrl,
+        );
+        installedProfileContent = [
+          ...installedProfileContent.filter((file) => file.projectId !== project.projectId),
+          { ...installedFile, kind: contentKind },
+        ];
+      } else if (installed.has(project.projectId)) {
+        await removeMod(instance.id, project.projectId);
+        await onchanged();
+        onnotify({
+          title: "Mod removed",
+          message: `${project.title} was removed from ${instance.name}.`,
+          tone: "success",
+        });
+      } else {
         await addMod(
           instance.id,
-          mod.projectId,
-          mod.title,
-          searchVersionSelections[mod.projectId] || null,
+          project.projectId,
+          project.title,
+          searchVersionSelections[project.projectId] || null,
         );
-      await onchanged();
+        await onchanged();
+        onnotify({
+          title: "Mod installed",
+          message: `${project.title} was added to ${instance.name}.`,
+          tone: "success",
+        });
+      }
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      busyProjectId = "";
+    }
+  }
+
+  async function removeInstalledContent(file: ProfileContentFile & { kind: ProfileContentKind }) {
+    error = "";
+    busyProjectId = file.projectId ?? `${file.kind}:${file.fileName}`;
+    try {
+      await removeProfileContent(instance.id, file.kind, file.fileName);
+      installedProfileContent = installedProfileContent.filter(
+        (item) => !(item.kind === file.kind && item.fileName === file.fileName),
+      );
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      busyProjectId = "";
+    }
+  }
+
+  function formatFileSize(bytes: number | null): string {
+    if (bytes === null) return "Folder";
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function toggleProfileContent(
+    file: ProfileContentFile & { kind: ProfileContentKind },
+    enabled: boolean,
+  ) {
+    error = "";
+    busyProjectId = file.projectId ?? `${file.kind}:${file.fileName}`;
+    try {
+      await setProfileContentEnabled(instance.id, file.kind, file.fileName, enabled);
+      installedProfileContent = installedProfileContent.map((item) =>
+        item.kind === file.kind && item.fileName === file.fileName ? { ...item, enabled } : item,
+      );
     } catch (cause) {
       error = messageFromError(cause);
     } finally {
@@ -311,6 +684,49 @@
     try {
       await removeMod(instance.id, projectId);
       await onchanged();
+      onnotify({
+        title: "Mod removed",
+        message: `${details[projectId]?.title ?? installedMods.find((mod) => mod.projectId === projectId)?.name ?? "The mod"} was removed.`,
+        tone: "success",
+      });
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      busyProjectId = "";
+    }
+  }
+
+  async function toggleLocalMod(mod: InstalledModFile, enabled: boolean) {
+    error = "";
+    busyProjectId = `local:${mod.fileName}`;
+    try {
+      await setLocalModEnabled(instance.id, mod.fileName, enabled);
+      installedModFiles = installedModFiles.map((file) =>
+        file.fileName === mod.fileName ? { ...file, enabled } : file,
+      );
+      onnotify({
+        title: enabled ? "Local mod enabled" : "Local mod disabled",
+        message: `${mod.name} will ${enabled ? "be loaded" : "not be loaded"} the next time Minecraft starts.`,
+        tone: "success",
+      });
+    } catch (cause) {
+      error = messageFromError(cause);
+    } finally {
+      busyProjectId = "";
+    }
+  }
+
+  async function removeLocalMod(mod: InstalledModFile) {
+    error = "";
+    busyProjectId = `local:${mod.fileName}`;
+    try {
+      await removeLocalModFile(instance.id, mod.fileName);
+      installedModFiles = installedModFiles.filter((file) => file.fileName !== mod.fileName);
+      onnotify({
+        title: "Local mod removed",
+        message: `${mod.name} was removed from ${instance.name}.`,
+        tone: "success",
+      });
     } catch (cause) {
       error = messageFromError(cause);
     } finally {
@@ -324,6 +740,11 @@
     try {
       await setModEnabled(instance.id, projectId, enabled);
       await onchanged();
+      onnotify({
+        title: enabled ? "Mod enabled" : "Mod disabled",
+        message: `${details[projectId]?.title ?? installedMods.find((mod) => mod.projectId === projectId)?.name ?? "The mod"} is now ${enabled ? "enabled" : "disabled"} for Minecraft ${instance.minecraftVersion}.`,
+        tone: "success",
+      });
     } catch (cause) {
       error = messageFromError(cause);
     } finally {
@@ -337,6 +758,15 @@
     try {
       await setModVersion(instance.id, projectId, instance.minecraftVersion, versionId || null);
       await onchanged();
+      const versionName = versionId
+        ? (versionsByProject[projectId]?.find((version) => version.id === versionId)?.name ??
+          versionId)
+        : "Automatic · latest compatible";
+      onnotify({
+        title: "Mod version changed",
+        message: `${details[projectId]?.title ?? installedMods.find((mod) => mod.projectId === projectId)?.name ?? "The mod"}: ${versionName}`,
+        tone: "success",
+      });
     } catch (cause) {
       error = messageFromError(cause);
     } finally {
@@ -352,6 +782,11 @@
       await setModVersion(instance.id, projectId, instance.minecraftVersion, versionId);
       installedVersionIds = { ...installedVersionIds, [projectId]: versionId };
       await onchanged();
+      onnotify({
+        title: "Mod updated",
+        message: `${details[projectId]?.title ?? installedMods.find((mod) => mod.projectId === projectId)?.name ?? "The mod"} now uses the selected compatible version.`,
+        tone: "success",
+      });
     } catch (cause) {
       error = messageFromError(cause);
     } finally {
@@ -360,7 +795,8 @@
     }
   }
 
-  async function loadSearchVersions(projectId: string) {
+  async function loadSearchVersions(project: ModrinthHit) {
+    const projectId = project.projectId;
     if (
       versionsByProject[projectId] ||
       searchVersionsByProject[projectId] ||
@@ -369,7 +805,10 @@
       return;
     loadingSearchVersions = { ...loadingSearchVersions, [projectId]: true };
     try {
-      const versions = await listModVersions(projectId, instance.minecraftVersion, instance.loader);
+      const contentKind = contentKindFor(project);
+      const versions = contentKind
+        ? await listProfileContentVersions(projectId, instance.minecraftVersion, contentKind)
+        : await listModVersions(projectId, instance.minecraftVersion, instance.loader);
       searchVersionsByProject = { ...searchVersionsByProject, [projectId]: versions };
     } catch (cause) {
       error = messageFromError(cause);
@@ -378,16 +817,21 @@
     }
   }
 
-  async function changeSearchVersion(projectId: string, versionId: string) {
-    if (installed.has(projectId)) {
-      await changeModVersion(projectId, versionId);
+  async function changeSearchVersion(project: ModrinthHit, versionId: string) {
+    if (project.projectType === "mod" && packInstalled.has(project.projectId)) return;
+    if (project.projectType === "mod" && installed.has(project.projectId)) {
+      await changeModVersion(project.projectId, versionId);
       return;
     }
-    searchVersionSelections = { ...searchVersionSelections, [projectId]: versionId };
+    searchVersionSelections = {
+      ...searchVersionSelections,
+      [project.projectId]: versionId,
+    };
   }
 
   async function changeMinecraftVersion(minecraftVersion: string) {
     if (minecraftVersion === instance.minecraftVersion) return;
+    versionInfoOpen = false;
     changingMinecraftVersion = true;
     error = "";
     try {
@@ -399,32 +843,141 @@
     }
   }
 
-  async function openProject(slugOrId: string) {
-    const url = `https://modrinth.com/mod/${encodeURIComponent(slugOrId)}`;
-    if ("__TAURI_INTERNALS__" in window) await openUrl(url);
-    else window.open(url, "_blank", "noopener,noreferrer");
+  async function openProject(projectId: string, projectType = "mod", hit?: ModrinthHit) {
+    selectedProjectDetails = null;
+    const openedProject =
+      hit ??
+      ({
+        projectId,
+        projectType: projectType as ModrinthHit["projectType"],
+        slug: projectId,
+        title:
+          details[projectId]?.title ??
+          installedMods.find((mod) => mod.projectId === projectId)?.name ??
+          "Modrinth project",
+        description: "Loading project details…",
+        author: "Modrinth",
+        downloads: 0,
+        iconUrl: details[projectId]?.iconUrl ?? null,
+        categories: [],
+        versions: [],
+      } satisfies ModrinthHit);
+    selectedProject = openedProject;
+    void loadSearchVersions(openedProject);
+    try {
+      const project = (await getModDetails([projectId]))[0] ?? null;
+      selectedProjectDetails = project;
+      if (project && selectedProject) {
+        selectedProject = {
+          ...selectedProject,
+          slug: project.slug,
+          title: project.title,
+          description: project.description || selectedProject.description,
+          downloads: project.downloads,
+          iconUrl: project.iconUrl,
+          categories: project.categories,
+        };
+      }
+    } catch (cause) {
+      error = messageFromError(cause);
+    }
   }
+
+  function selectedProjectVersions(): ModrinthVersion[] {
+    if (!selectedProject) return [];
+    return (
+      versionsByProject[selectedProject.projectId] ??
+      searchVersionsByProject[selectedProject.projectId] ??
+      []
+    );
+  }
+
+  function selectedProjectVersionId(): string {
+    if (!selectedProject) return "";
+    if (selectedPackMod) return selectedPackMod.versionId ?? "";
+    if (selectedManagedDependency) return selectedManagedDependency.versionId ?? "";
+    if (selectedProject.projectType === "mod" && installed.has(selectedProject.projectId)) {
+      return (
+        instance.mods.find((item) => item.projectId === selectedProject?.projectId)
+          ?.versionOverrides?.[instance.minecraftVersion] ?? ""
+      );
+    }
+    return searchVersionSelections[selectedProject.projectId] ?? "";
+  }
+
+  function selectedProjectActionLabel(): string {
+    if (!selectedProject) return "Install";
+    if (selectedPackMod) return "Managed by modpack";
+    if (selectedManagedDependency) return "Managed dependency";
+    if (selectedProject.projectType === "mod" && installed.has(selectedProject.projectId)) {
+      return "Remove";
+    }
+    return installedContent.has(selectedProject.projectId) ? "Update" : "Install";
+  }
+
+  async function runSelectedProjectAction() {
+    if (!selectedProject || selectedPackMod || selectedManagedDependency) return;
+    const content = installedContent.get(selectedProject.projectId);
+    if (selectedProject.projectType === "mod" && installed.has(selectedProject.projectId)) {
+      await removeInstalled(selectedProject.projectId);
+      selectedProject = null;
+    } else if (content) {
+      await toggleSearchResult(selectedProject);
+    } else {
+      await toggleSearchResult(selectedProject);
+    }
+  }
+
+  $effect(() => {
+    if (versionInfoOpen && versionInfoLayer && !versionInfoLayer.matches(":popover-open")) {
+      versionInfoLayer.showPopover();
+    }
+  });
 </script>
 
+{#if modDropActive || importingDroppedMods}
+  <div
+    class="pointer-events-none fixed bottom-4 left-[260px] right-4 top-4 z-[180] grid place-items-center rounded-[16px] border-2 border-dashed border-[var(--color-primary)]/70 bg-[#070a10]/85 backdrop-blur-xl"
+    aria-live="polite"
+  >
+    <div class="text-center">
+      <span class="mx-auto grid size-14 place-items-center text-[var(--color-primary)]">
+        <Icon name="upload" size={30} />
+      </span>
+      <p class="mt-3 text-lg font-black text-white">
+        {importingDroppedMods ? "Adding mods…" : "Drop .jar mods here"}
+      </p>
+      <p class="mt-1 text-xs text-[var(--color-text-muted)]">
+        They will be copied into {instance.name} and listed as local mods.
+      </p>
+    </div>
+  </div>
+{/if}
+
 <div class="flex items-start justify-between gap-5">
-  <PageHeader title="Mods" description={`Manage mods for ${instance.name}.`} />
+  <PageHeader
+    title="Mods"
+    description={`Manage mods, resource packs and shaders for ${instance.name}.`}
+  />
   <div class="flex items-end gap-3">
-    <label class="block">
-      <span
+    <div class="block">
+      <div
         class="mb-1.5 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#63809a]"
-        >Minecraft version
+      >
+        Minecraft version
         <button
           type="button"
           onclick={(event) => {
             event.preventDefault();
+            event.stopPropagation();
             versionInfoOpen = true;
           }}
           title="How version switching works"
           aria-label="Explain Minecraft version switching"
-          class="grid size-4 place-items-center rounded-full border border-cyan-300/15 text-[#6689a5] transition hover:border-cyan-300/35 hover:text-cyan-100"
-          ><Icon name="info" size={10} strokeWidth={2} /></button
-        ></span
-      >
+          class="grid size-4 place-items-center rounded-[4px] border border-white/[0.10] text-[var(--color-text-muted)] hover:border-white/[0.22] hover:text-white"
+          ><Icon name="info" size={10} /></button
+        >
+      </div>
       <CustomSelect
         value={instance.minecraftVersion}
         options={versions.map((version) => ({
@@ -436,34 +989,29 @@
         ariaLabel="Minecraft version for this profile"
         class="min-w-48 text-xs font-bold text-blue-50"
       />
-    </label>
-    {#if view === "installed"}<button
-        onclick={() => (view = "search")}
-        class="mc-primary flex items-center gap-2 px-4 py-2.5 text-xs font-bold"
-      >
-        <Icon name="search" size={15} />Find mods</button
-      >{/if}
+    </div>
   </div>
 </div>
 
 {#if versionInfoOpen}<div
-    class="fixed inset-0 z-[70] grid place-items-center bg-[#010612]/85 p-6"
+    bind:this={versionInfoLayer}
+    popover="manual"
+    class="fixed inset-0 z-[70] m-0 grid h-auto w-auto max-w-none place-items-center border-0 bg-black/70 p-6 text-inherit backdrop-blur-sm"
     role="presentation"
     onclick={(event) => event.currentTarget === event.target && (versionInfoOpen = false)}
   >
     <div
-      class="mc-panel w-full max-w-lg overflow-hidden border-cyan-300/25"
+      class="mc-panel w-full max-w-lg overflow-hidden border-white/[0.12]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="version-switch-info-title"
     >
-      <div class="flex items-start gap-4 border-b border-cyan-300/10 bg-[#071a35] px-6 py-5">
-        <span
-          class="grid size-10 shrink-0 place-items-center border border-cyan-300/20 bg-cyan-300/[0.06] text-cyan-200"
-          ><Icon name="info" size={19} strokeWidth={1.8} /></span
+      <div class="flex items-start gap-4 border-b border-white/[0.08] px-6 py-5">
+        <span class="grid size-10 shrink-0 place-items-center text-[var(--color-primary)]"
+          ><Icon name="info" size={28} /></span
         >
         <div>
-          <p class="text-[9px] font-bold uppercase tracking-[.16em] text-cyan-300/60">
+          <p class="text-[9px] font-bold uppercase tracking-[.16em] text-[var(--color-text-muted)]">
             Version switching
           </p>
           <h2 id="version-switch-info-title" class="block-title mt-1 text-lg uppercase">
@@ -471,7 +1019,7 @@
           </h2>
         </div>
       </div>
-      <div class="space-y-3 p-6 text-xs leading-6 text-[#8daac1]">
+      <div class="space-y-3 p-6 text-xs leading-6 text-[var(--color-text-secondary)]">
         <p>
           Every Minecraft version remembers which personal mods are enabled or disabled and which
           exact mod version you selected.
@@ -486,7 +1034,7 @@
           pack.
         </p>
       </div>
-      <div class="flex justify-end border-t border-cyan-300/10 bg-[#030c1c] px-6 py-4">
+      <div class="flex justify-end border-t border-white/[0.08] px-6 py-4">
         <button
           onclick={() => (versionInfoOpen = false)}
           class="mc-primary px-4 py-2.5 text-xs font-bold">Got it</button
@@ -495,46 +1043,50 @@
     </div>
   </div>{/if}
 
-<nav class="mb-6 flex border-b border-cyan-200/[0.09]" aria-label="Mod pages">
+<nav
+  class="mb-6 flex w-fit gap-1 rounded-lg border border-white/[0.08] bg-black/20 p-1"
+  aria-label="Mod pages"
+>
   <button
     onclick={() => (view = "installed")}
-    class="border-b-2 px-5 py-3 text-xs font-bold uppercase tracking-wider transition {view ===
-    'installed'
-      ? 'border-cyan-300 text-cyan-100'
-      : 'border-transparent text-[#63809a] hover:text-[#a8c7dc]'}"
+    class="border px-5 py-2.5 text-xs font-bold uppercase tracking-wider {view === 'installed'
+      ? 'border-white/[0.12] bg-white/[0.08] text-white shadow-[inset_0_-2px_0_var(--color-primary)]'
+      : 'border-transparent bg-transparent text-[var(--color-text-muted)] hover:bg-white/[0.04] hover:text-white'}"
     >Installed
-    <span class="ml-1.5 text-[10px] opacity-60">{instance.mods.length + packMods.length}</span>
+    <span class="ml-1.5 text-[10px] opacity-60"
+      >{instance.mods.length +
+        packMods.length +
+        unmanagedInstalledMods.length +
+        installedProfileContent.length}</span
+    >
   </button>
   <button
     onclick={() => (view = "search")}
-    class="border-b-2 px-5 py-3 text-xs font-bold uppercase tracking-wider transition {view ===
-    'search'
-      ? 'border-cyan-300 text-cyan-100'
-      : 'border-transparent text-[#63809a] hover:text-[#a8c7dc]'}">Browse Modrinth</button
+    class="border px-5 py-2.5 text-xs font-bold uppercase tracking-wider {view === 'search'
+      ? 'border-white/[0.12] bg-white/[0.08] text-white shadow-[inset_0_-2px_0_var(--color-primary)]'
+      : 'border-transparent bg-transparent text-[var(--color-text-muted)] hover:bg-white/[0.04] hover:text-white'}"
+    ><img
+      src="/brand/modrinth.svg"
+      alt=""
+      class="mr-2 inline size-3.5 grayscale brightness-200 opacity-70"
+    />Browse Modrinth</button
   >
 </nav>
 
-{#if error}<div
-    class="mb-4 rounded-lg border border-red-400/20 bg-red-400/10 px-4 py-3 text-xs text-red-300"
-  >
-    {error}
-  </div>{/if}
-
 {#if instance.modpack}
   <div
-    class="mb-4 flex items-start gap-3 border border-violet-300/25 bg-violet-400/[0.07] px-4 py-3"
+    class="mb-4 flex items-start gap-3 rounded-xl border border-cyan-300/20 bg-cyan-300/[0.05] px-4 py-3 drop"
   >
     {#if instance.modpack.iconUrl}<img
         src={instance.modpack.iconUrl}
         alt=""
         class="size-9 shrink-0 object-cover"
-      />{:else}<span
-        class="grid size-9 shrink-0 place-items-center bg-violet-400/10 text-violet-200"
+      />{:else}<span class="grid size-9 shrink-0 place-items-center bg-cyan-300/10 text-cyan-200"
         ><Icon name="modpacks" size={18} /></span
       >{/if}
     <div>
-      <p class="text-xs font-bold text-violet-100">Managed by {instance.modpack.name}</p>
-      <p class="mt-1 text-[11px] leading-5 text-violet-200/60">
+      <p class="text-xs font-bold text-cyan-100">Managed by {instance.modpack.name}</p>
+      <p class="mt-1 text-[11px] leading-5 text-[var(--color-text-muted)]">
         The pack installed {instance.modpack.fileCount} verified files. Its Minecraft and Fabric versions
         stay locked; additional personal mods can still be added below.
       </p>
@@ -542,26 +1094,24 @@
   </div>
 {/if}
 
-{#if view === "installed" && (incompatibleCount > 0 || !conflictReport.compatible)}
-  <div
-    class="mb-4 flex items-start gap-3 border border-red-400/30 bg-red-400/[0.08] px-4 py-3 text-red-100"
-  >
-    <span class="grid size-6 shrink-0 place-items-center bg-red-400/15 text-sm font-black">!</span>
-    <div>
-      <p class="text-xs font-bold uppercase tracking-wider">
-        {incompatibleCount > 0
-          ? `${incompatibleCount} ${incompatibleCount === 1 ? "mod is" : "mods are"} incompatible`
-          : "Conflict between enabled mods detected"}
-      </p>
-      <p class="mt-1 text-[11px] text-red-200/70">
-        {conflictReport.message ??
-          "Choose another mod version, disable the affected mod, or return to a supported Minecraft version."}
-      </p>
-    </div>
-  </div>
+{#if selectedProject}
+  <ModrinthProjectDialog
+    project={selectedProject}
+    details={selectedProjectDetails}
+    versions={selectedProjectVersions()}
+    versionsLoading={loadingSearchVersions[selectedProject.projectId] ?? false}
+    selectedVersionId={selectedProjectVersionId()}
+    busy={busyProjectId === selectedProject.projectId}
+    readOnly={Boolean(selectedPackMod || selectedManagedDependency)}
+    actionLabel={selectedProjectActionLabel()}
+    onloadversions={() => loadSearchVersions(selectedProject!)}
+    onversionchange={(versionId) => changeSearchVersion(selectedProject!, versionId)}
+    onaction={runSelectedProjectAction}
+    onclose={() => (selectedProject = null)}
+  />
 {/if}
 
-{#if view === "installed" && checkingConflicts}
+{#if view === "installed" && showInstalledMods && checkingConflicts}
   <div class="mb-4 flex items-center gap-2 text-[10px] uppercase tracking-wider text-[#6689a5]">
     <span class="size-2 animate-pulse bg-cyan-400"></span>Checking dependencies between enabled
     mods…
@@ -571,82 +1121,267 @@
 {#if view === "installed"}
   <section class="mc-panel overflow-hidden">
     <div
-      class="flex items-center justify-between border-b border-cyan-200/[0.09] bg-[#071a35] px-5 py-4"
+      class="flex flex-wrap items-center justify-between gap-3 border-b border-cyan-200/[0.09] bg-white/[0.035] px-5 py-4"
     >
       <div>
-        <h2 class="block-title text-sm uppercase">Installed mods</h2>
+        <h2 class="block-title text-sm uppercase">Installed content</h2>
         <p class="mt-1 text-[11px] text-[#698ba9]">
-          Disabled mods remain configured but are not loaded when Minecraft starts.
+          {installedFilter === "resourcepacks"
+            ? "Choose which texture packs Minecraft loads with this profile."
+            : "Mods, resource packs and shaders belonging to this profile."}
         </p>
       </div>
-      <span
-        class="border border-cyan-300/20 bg-cyan-300/[0.07] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-200"
-        >{instance.mods.filter((mod) => modEnabled(mod)).length + packMods.length} active</span
-      >
+      <div class="flex flex-wrap items-center gap-2">
+        <label
+          class="mc-field flex h-9 w-76 items-center gap-2 px-3 text-[var(--color-text-muted)] focus-within:border-[var(--color-border-brand)]"
+        >
+          <Icon name="search" size={12} />
+          <input
+            bind:value={installedQuery}
+            type="search"
+            aria-label="Search installed mods"
+            placeholder="Search installed mods…"
+            class="min-w-0 flex-1 bg-transparent text-xs text-white outline-none placeholder:text-[var(--color-text-faint)]"
+          />
+        </label>
+        <nav
+          class="flex gap-1 rounded-lg text-xs font-bold border border-white/[0.08] bg-black/15 p-1"
+          aria-label="Content filter"
+        >
+          {#each [{ id: "all", label: "All" }, { id: "mods", label: "Mods" }, { id: "resourcepacks", label: "Resource packs" }, { id: "shaderpacks", label: "Shader" }] as filter}
+            <button
+              type="button"
+              onclick={() => (installedFilter = filter.id as typeof installedFilter)}
+              aria-pressed={installedFilter === filter.id}
+              class="px-3 py-2 text-[6px] font-bold uppercase tracking-wider {installedFilter ===
+              filter.id
+                ? 'bg-cyan-300/[0.12] text-cyan-50'
+                : 'text-[#6689a5] hover:bg-white/[0.05] hover:text-white'}">{filter.label}</button
+            >
+          {/each}
+        </nav>
+      </div>
     </div>
-    {#if installedMods.length || packMods.length}
+    {#if visibleInstalledCount > 0}
       <div
-        class="hidden grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] gap-4 border-b border-white/[0.06] bg-[#041126] px-5 py-2.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#597792] sm:grid"
+        class="hidden grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] gap-4 border-b border-white/[0.06] bg-white/[0.02] px-5 py-2.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#597792] sm:grid"
       >
-        <span>Mod</span><span>Version for Minecraft {instance.minecraftVersion}</span><span
-          >Status</span
-        ><span class="text-right">Action</span>
+        <span>Content</span><span>Version or file</span><span>Type &amp; status</span><span
+          class="text-right">Action</span
+        >
       </div>
       <div class="divide-y divide-white/[0.06]">
-        {#each packMods as mod}
+        {#each showInstalledMods ? filteredPackMods : [] as mod}
           <article
-            class="grid gap-3 bg-violet-400/[0.035] px-5 py-4 transition hover:bg-violet-400/[0.06] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4"
+            class="grid gap-3 px-5 py-4 transition hover:bg-cyan-300/[0.035] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4"
           >
             <div class="flex min-w-0 items-center gap-3">
               {#if mod.iconUrl}<img
                   src={mod.iconUrl}
                   alt=""
-                  class="size-11 shrink-0 rounded-lg border border-violet-300/15 bg-[#07335d] object-cover"
+                  class="size-11 shrink-0 rounded-lg border border-cyan-300/15 bg-[#07335d] object-cover"
                 />{:else}<div
-                  class="grid size-11 shrink-0 place-items-center border border-violet-300/15 bg-violet-400/10 text-sm font-black uppercase text-violet-100"
+                  class="grid size-11 shrink-0 place-items-center rounded-lg border border-cyan-300/15 bg-cyan-300/10 text-sm font-black uppercase text-cyan-100"
                 >
                   {mod.name.slice(0, 1)}
                 </div>{/if}
               <div class="min-w-0">
                 {#if mod.projectId}<button
                     onclick={() => mod.projectId && openProject(mod.projectId)}
-                    class="block max-w-full truncate text-left text-sm font-semibold text-[#edf8ff] hover:text-violet-200 hover:underline"
+                    class="block max-w-full truncate text-left text-sm font-semibold text-[#edf8ff] hover:text-cyan-200 hover:underline"
                     >{mod.name}</button
                   >{:else}<p class="truncate text-sm font-semibold text-[#edf8ff]">
                     {mod.name}
                   </p>{/if}
-                <p class="mt-1 truncate font-mono text-[10px] text-[#665f91]">
+                <p class="mt-1 truncate font-mono text-[10px] text-[#52728f]">
                   {mod.projectId ?? "External mod"}
                 </p>
               </div>
             </div>
             <div class="min-w-0">
-              <p class="truncate text-[11px] font-semibold text-[#c8c3ec]">{mod.versionName}</p>
-              <p class="mt-1.5 truncate font-mono text-[9px] text-[#615d82]">
+              <p class="truncate text-[11px] font-semibold text-[#c8e5f7]">{mod.versionName}</p>
+              <p class="mt-1.5 truncate font-mono text-[9px] text-[#55748f]">
                 {mod.versionId ?? "No Modrinth match"}
               </p>
             </div>
             <div>
               <span
-                class="inline-flex items-center gap-1.5 border border-violet-300/20 bg-violet-400/10 px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-wider text-violet-200"
+                class="inline-flex items-center gap-1.5 rounded-sm gap-1 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-bold uppercase text-cyan-600"
               >
-                <Icon name={mod.projectId ? "check" : "mods"} size={10} />{mod.projectId
-                  ? "Modrinth match"
-                  : "External mod"}
+                <Icon name="lock" size={10} />Pack managed
               </span>
+              <p class="mt-1.5 text-[8px] font-bold uppercase tracking-wider text-[#55748f]">
+                {mod.projectId ? "Modrinth project" : "External file"}
+              </p>
             </div>
             <span
-              class="justify-self-start text-[9px] font-bold uppercase tracking-wider text-[#625f7e] sm:justify-self-end"
+              class="justify-self-start text-[9px] font-bold uppercase tracking-wider text-[#55748f] sm:justify-self-end"
               >Read only</span
             >
           </article>
         {/each}
-        {#each installedMods as mod}
+        {#each showInstalledMods ? filteredUnmanagedInstalledMods : [] as mod (mod.fileName)}
+          {@const project = mod.projectId ? details[mod.projectId] : undefined}
+          {@const localBusy = busyProjectId === `local:${mod.fileName}`}
+          <article
+            class="grid gap-3 px-5 py-4 transition hover:bg-cyan-300/[0.035] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              {#if project?.iconUrl}<img
+                  src={project.iconUrl}
+                  alt=""
+                  class="size-11 shrink-0 rounded-lg border border-cyan-300/15 bg-[#07335d] object-cover"
+                />{:else}<div
+                  class="grid size-11 shrink-0 place-items-center border border-cyan-300/15 bg-cyan-300/10 rounded-lg text-sm font-black uppercase text-cyan-100"
+                >
+                  {(project?.title ?? mod.projectId ?? mod.name).slice(0, 1)}
+                </div>{/if}
+              <div class="min-w-0">
+                {#if mod.projectId}<button
+                    type="button"
+                    onclick={() => mod.projectId && openProject(mod.projectId)}
+                    class="block max-w-full truncate text-left text-sm font-semibold text-[#edf8ff] hover:text-cyan-200 hover:underline"
+                    >{project?.title ?? mod.name}</button
+                  >{:else}<p class="truncate text-sm font-semibold text-[#edf8ff]">
+                    {mod.name}
+                  </p>{/if}
+                <p class="mt-1 truncate font-mono text-[10px] text-[#52728f]">
+                  {mod.projectId ?? mod.fileName}
+                </p>
+              </div>
+            </div>
+            <div class="min-w-0">
+              <p class="truncate text-[11px] font-semibold text-[#c8e5f7]">Installed version</p>
+              <p class="mt-1.5 truncate font-mono text-[9px] text-[#55748f]">
+                {mod.versionId ?? mod.fileName}
+              </p>
+            </div>
+            <div>
+              {#if mod.local}
+                <Toggle
+                  checked={mod.enabled}
+                  label={`${mod.enabled ? "Disable" : "Enable"} ${mod.name}`}
+                  disabled={localBusy}
+                  showState
+                  onLabel="Enabled"
+                  offLabel="Disabled"
+                  onchange={(enabled) => toggleLocalMod(mod, enabled)}
+                />
+                <p class="mt-1.5 text-[8px] font-bold uppercase tracking-wider text-[#55748f]">
+                  Local profile mod
+                </p>
+              {:else}
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-sm bg-cyan-300/10 px-2 py-0.5 text-[11px] font-bold uppercase text-cyan-600"
+                >
+                  <Icon name="lock" size={10} />Dependency
+                </span>
+                <p class="mt-1.5 text-[8px] font-bold uppercase tracking-wider text-[#55748f]">
+                  Required by an installed mod
+                </p>
+              {/if}
+            </div>
+            {#if mod.local}
+              <button
+                type="button"
+                onclick={() => removeLocalMod(mod)}
+                disabled={localBusy}
+                title={`Remove ${mod.name}`}
+                aria-label={`Remove ${mod.name}`}
+                class="mc-remove justify-self-start px-2.5 py-2 text-[9px] font-bold uppercase tracking-wider disabled:cursor-wait disabled:opacity-40 sm:justify-self-end"
+                >{localBusy ? "Working…" : "Remove"}</button
+              >
+            {:else}
+              <span
+                class="justify-self-start text-[9px] font-bold uppercase tracking-wider text-[#55748f] sm:justify-self-end"
+                >Managed automatically</span
+              >
+            {/if}
+          </article>
+        {/each}
+        {#each filteredProfileContent as file (`${file.kind}:${file.fileName}`)}
+          {@const projectRoute = file.kind === "resourcepacks" ? "resourcepack" : "shader"}
+          {@const contentBusy =
+            busyProjectId === (file.projectId ?? `${file.kind}:${file.fileName}`)}
+          <article
+            class="grid gap-3 px-5 py-4 transition hover:bg-cyan-300/[0.035] sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              {#if file.iconUrl}
+                <img
+                  src={file.iconUrl}
+                  alt=""
+                  class="size-11 shrink-0 rounded-lg border border-cyan-300/15 bg-[#07335d] object-cover"
+                />
+              {:else}
+                <span
+                  class="grid size-11 shrink-0 place-items-center border border-cyan-300/15 rounded-lg bg-cyan-300/[0.055] text-[#77bfe9]"
+                >
+                  <Icon name={file.kind === "resourcepacks" ? "palette" : "shader"} size={17} />
+                </span>
+              {/if}
+              <div class="min-w-0">
+                {#if file.projectId}
+                  <button
+                    type="button"
+                    onclick={() => file.projectId && openProject(file.projectId, projectRoute)}
+                    class="block max-w-full truncate text-left text-sm font-semibold text-[#edf8ff] hover:text-cyan-300 hover:underline"
+                    >{file.name}</button
+                  >
+                {:else}
+                  <h3 class="truncate text-sm font-semibold text-[#edf8ff]">{file.name}</h3>
+                {/if}
+                <p class="mt-1 text-[9px] font-bold uppercase tracking-wider text-[#52728f]">
+                  {file.projectId ? "Installed from Modrinth" : "Local profile file"}
+                </p>
+              </div>
+            </div>
+            <div class="min-w-0">
+              <p class="truncate text-[11px] font-semibold text-[#c8e5f7]">
+                {file.versionId ?? file.fileName}
+              </p>
+              <p class="mt-1.5 truncate font-mono text-[9px] text-[#55748f]">
+                {file.fileName} · {formatFileSize(file.sizeBytes)}
+              </p>
+            </div>
+            <div class="min-w-0">
+              <Toggle
+                checked={file.enabled ?? false}
+                label={`${file.enabled ? "Remove" : "Add"} ${file.name} ${file.enabled ? "from" : "to"} the profile folder`}
+                disabled={contentBusy}
+                showState
+                onLabel="In folder"
+                offLabel="Not in folder"
+                onchange={(checked) => toggleProfileContent(file, checked)}
+              />
+              <p class="mt-1.5 text-[8px] font-bold uppercase tracking-wider text-[#55748f]">
+                Does not change the in-game selection
+              </p>
+            </div>
+            <div class="flex justify-self-start gap-1.5 sm:justify-self-end">
+              <button
+                type="button"
+                onclick={() => removeInstalledContent(file)}
+                disabled={Boolean(busyProjectId)}
+                title={`Remove ${file.name}`}
+                aria-label={`Remove ${file.name}`}
+                class="mc-remove px-2.5 py-2 text-[9px] font-bold uppercase tracking-wider disabled:cursor-wait disabled:opacity-40"
+                >{contentBusy ? "Working…" : "Remove"}</button
+              >
+            </div>
+          </article>
+        {/each}
+        {#each showInstalledMods ? filteredInstalledMods : [] as mod}
           {@const project = details[mod.projectId]}
           {@const availableVersions = versionsByProject[mod.projectId]}
           {@const compatibility = compatibilityFor(mod)}
           {@const enabled = modEnabled(mod)}
           {@const update = modUpdates.find((item) => item.projectId === mod.projectId)}
+          {@const selectedVersionId = mod.versionOverrides?.[instance.minecraftVersion] ?? ""}
+          {@const selectedVersionIsCompatible = Boolean(
+            selectedVersionId &&
+            availableVersions?.some((version) => version.id === selectedVersionId),
+          )}
           <article
             class="grid gap-3 px-5 py-4 transition sm:grid-cols-[minmax(0,1.35fr)_minmax(210px,1fr)_130px_150px] sm:items-center sm:gap-4 {compatibility.state ===
             'incompatible'
@@ -659,7 +1394,7 @@
                   alt=""
                   class="size-11 shrink-0 object-cover rounded-lg border border-cyan-300/15 bg-[#07335d]"
                 />{:else}<div
-                  class="grid size-11 shrink-0 place-items-center border border-cyan-300/15 bg-[#07335d] text-sm font-black uppercase text-cyan-100"
+                  class="grid size-11 shrink-0 place-items-center rounded-lg border border-cyan-300/15 bg-[#07335d] text-sm font-black uppercase text-cyan-100"
                 >
                   {mod.name.slice(0, 1)}
                 </div>{/if}
@@ -674,14 +1409,13 @@
             </div>
             <div class="min-w-0">
               <CustomSelect
-                value={mod.versionOverrides?.[instance.minecraftVersion] ?? ""}
+                value={selectedVersionId}
                 options={[
                   { value: "", label: "Automatic · latest compatible" },
-                  ...(compatibility.state === "incompatible" &&
-                  mod.versionOverrides?.[instance.minecraftVersion]
+                  ...(selectedVersionId && !selectedVersionIsCompatible
                     ? [
                         {
-                          value: mod.versionOverrides[instance.minecraftVersion],
+                          value: selectedVersionId,
                           label: "Selected version · incompatible",
                         },
                       ]
@@ -692,9 +1426,8 @@
                   })),
                 ]}
                 onchange={(value) => changeModVersion(mod.projectId, String(value))}
-                disabled={!availableVersions ||
-                  !availableVersions.length ||
-                  busyProjectId === mod.projectId}
+                disabled={busyProjectId === mod.projectId ||
+                  (!selectedVersionId && (!availableVersions || !availableVersions.length))}
                 ariaLabel={`Version of ${mod.name} for Minecraft ${instance.minecraftVersion}`}
                 class="w-full text-[11px] text-[#c8e5f7]"
               />
@@ -707,28 +1440,15 @@
               </p>
             </div>
             <div class="min-w-0">
-              <button
-                role="switch"
-                aria-checked={enabled}
-                aria-label={`${enabled ? "Disable" : "Enable"} ${mod.name} for Minecraft ${instance.minecraftVersion}`}
-                onclick={() => toggleEnabled(mod.projectId, !enabled)}
+              <Toggle
+                checked={enabled}
+                label={`${enabled ? "Disable" : "Enable"} ${mod.name} for Minecraft ${instance.minecraftVersion}`}
                 disabled={busyProjectId === mod.projectId}
-                class="flex items-center gap-2.5 text-left disabled:cursor-wait disabled:opacity-50"
-                ><span
-                  class="relative h-6 w-10 border rounded-md transition {enabled
-                    ? 'border-emerald-300/40 bg-emerald-400/20'
-                    : 'border-white/15 bg-white/[0.04]'}"
-                  ><span
-                    class="absolute top-[3px] size-4 transition-all rounded-sm {enabled
-                      ? 'left-[18px] bg-emerald-300 shadow-[0_0_7px_#34d399]'
-                      : 'left-[3px] bg-[#607286]'}"
-                  ></span></span
-                ><span
-                  class="text-[10px] font-bold uppercase tracking-wider {enabled
-                    ? 'text-emerald-300'
-                    : 'text-[#718096]'}">{enabled ? "Enabled" : "Disabled"}</span
-                ></button
-              >
+                showState
+                onLabel="Enabled"
+                offLabel="Disabled"
+                onchange={(checked) => toggleEnabled(mod.projectId, checked)}
+              />
               <div
                 class="mt-2 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider {compatibility.state ===
                 'incompatible'
@@ -740,21 +1460,21 @@
                 <span class="truncate" title={compatibility.message}>{compatibility.message}</span>
               </div>
             </div>
-            <div class="flex justify-self-start gap-1.5 sm:justify-self-end">
+            <div class="flex justify-self-start gap-2 sm:justify-self-end">
               {#if update}<button
                   onclick={() => installUpdate(update.projectId, update.latestId)}
                   disabled={Boolean(busyProjectId)}
                   title={`Update ${update.currentName} → ${update.latestName} for Minecraft ${instance.minecraftVersion}`}
                   aria-label={`Update ${mod.name} to ${update.latestName}`}
-                  class="grid size-7 place-items-center border border-emerald-300/15 bg-emerald-300/[0.035] text-[#78a99a] transition hover:border-emerald-300/30 hover:text-emerald-200 disabled:cursor-wait disabled:opacity-40"
+                  class="grid size-7 place-items-center text-[#78a99a] transition hover:text-emerald-200 disabled:cursor-wait disabled:opacity-40"
                   ><span class={updatingProjectId === mod.projectId ? "animate-pulse" : ""}
-                    ><Icon name="download" size={11} strokeWidth={2} /></span
+                    ><Icon name="download" size={25} /></span
                   ></button
                 >{/if}
               <button
                 onclick={() => removeInstalled(mod.projectId)}
                 disabled={busyProjectId === mod.projectId}
-                class="border border-red-300/15 bg-red-400/[0.035] px-2.5 py-2 text-[9px] font-bold uppercase tracking-wider text-red-200/70 transition hover:bg-red-400/10 hover:text-red-200 disabled:cursor-wait disabled:opacity-40"
+                class="mc-remove px-2.5 py-2 text-[9px] font-bold uppercase tracking-wider disabled:cursor-wait disabled:opacity-40"
                 >{busyProjectId === mod.projectId && !updatingProjectId
                   ? "Working…"
                   : "Remove"}</button
@@ -765,17 +1485,23 @@
       </div>
     {:else}
       <div class="px-6 py-12 text-center">
-        <div
-          class="mx-auto mb-3 grid size-11 place-items-center border border-cyan-300/15 bg-cyan-300/[0.05] text-[#5e8eae]"
-        >
-          <Icon name="mods" size={20} />
+        <div class="mx-auto mb-3 grid size-11 place-items-center text-[#5e8eae]">
+          <Icon name="mods" size={26} />
         </div>
-        <p class="text-sm font-semibold text-[#aec8da]">No mods installed</p>
-        <p class="mt-1 text-xs text-[#5f7b94]">Browse Modrinth to add compatible mods.</p>
-        <button
-          onclick={() => (view = "search")}
-          class="mc-primary mt-5 px-4 py-2.5 text-xs font-bold">Browse Modrinth</button
-        >
+        <p class="text-sm font-semibold text-[#aec8da]">
+          {normalizedInstalledQuery
+            ? "No installed mods found"
+            : installedFilter === "all"
+              ? "No content installed"
+              : "No matching content installed"}
+        </p>
+        <p class="mt-1 text-xs text-[#5f7b94]">
+          {normalizedInstalledQuery
+            ? `No installed content matches “${installedQuery.trim()}”.`
+            : installedFilter === "all"
+              ? "Browse Modrinth for mods, resource packs and shaders."
+              : "Choose another filter or install matching content from Modrinth."}
+        </p>
       </div>
     {/if}
   </section>
@@ -792,14 +1518,26 @@
     <div class="mc-field px-4 py-3 text-xs text-[#b8d8ed]">
       Minecraft {instance.minecraftVersion}
     </div>
-    <div class="mc-field px-4 py-3 text-xs capitalize text-[#b8d8ed]">{instance.loader}</div>
+    <CustomSelect
+      value={searchIndex}
+      options={[
+        { value: "relevance", label: "Relevance" },
+        { value: "downloads", label: "Downloads" },
+        { value: "follows", label: "Followers" },
+        { value: "newest", label: "Date published" },
+        { value: "updated", label: "Date updated" },
+      ]}
+      onchange={changeSearchIndex}
+      ariaLabel="Sort Modrinth results"
+      class="w-44 text-xs text-[#b8d8ed]"
+    />
     <button class="mc-primary px-5 text-xs font-bold">Search</button>
   </form>
   <div class="mb-3 flex items-center justify-between">
     <h2 class="text-xs font-semibold uppercase tracking-[.1em] text-[#707580]">
       {searched ? "Search results" : "Discover on Modrinth"}
     </h2>
-    <span class="text-[11px] text-[#626771]">Java Edition · Fabric</span>
+    <span class="text-[11px] text-[#626771]">Mods · Resource packs · Shaders</span>
   </div>
   {#if loading}<div class="grid h-48 place-items-center">
       <div
@@ -808,7 +1546,7 @@
     </div>
   {:else if results.length}<div class="space-y-2.5">
       {#each results as mod}<article
-          class="mc-panel flex items-center gap-4 p-4 transition hover:border-cyan-300/35 hover:bg-[#0a203d]"
+          class="mc-panel flex items-center gap-4 p-4 hover:border-cyan-300/35 hover:bg-white/[0.045]"
         >
           {#if mod.iconUrl}<img
               src={mod.iconUrl}
@@ -822,10 +1560,14 @@
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <button
-                onclick={() => openProject(mod.slug)}
+                onclick={() => openProject(mod.projectId, mod.projectType, mod)}
                 class="truncate text-left text-sm font-semibold hover:text-cyan-300 hover:underline"
                 >{mod.title}</button
               ><span
+                class="inline-flex shrink-0 items-center gap-1.5 rounded bg-cyan-300/[0.08] px-1.5 py-0.5 text-[9px] font-semibold uppercase text-cyan-200"
+                ><Icon name={projectTypeIcon(mod)} size={9} />{projectTypeLabel(mod)}</span
+              >
+              <span
                 class="shrink-0 rounded bg-emerald-400/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-400"
                 >COMPATIBLE</span
               >
@@ -837,16 +1579,22 @@
           </div>
           <div class="flex w-60 shrink-0 items-center gap-2">
             <CustomSelect
-              value={installed.has(mod.projectId)
-                ? (instance.mods.find((item) => item.projectId === mod.projectId)
-                    ?.versionOverrides?.[instance.minecraftVersion] ?? "")
-                : (searchVersionSelections[mod.projectId] ?? "")}
+              value={mod.projectType === "mod" && packInstalled.has(mod.projectId)
+                ? (packMods.find((item) => item.projectId === mod.projectId)?.versionId ?? "")
+                : mod.projectType === "mod" && installed.has(mod.projectId)
+                  ? (instance.mods.find((item) => item.projectId === mod.projectId)
+                      ?.versionOverrides?.[instance.minecraftVersion] ?? "")
+                  : (searchVersionSelections[mod.projectId] ?? "")}
               options={[
                 {
                   value: "",
                   label: loadingSearchVersions[mod.projectId]
                     ? "Loading versions…"
-                    : "Automatic version",
+                    : mod.projectType === "mod"
+                      ? "Automatic version"
+                      : installedContent.has(mod.projectId)
+                        ? "Latest compatible update"
+                        : "Latest compatible",
                 },
                 ...(
                   versionsByProject[mod.projectId] ??
@@ -857,21 +1605,27 @@
                   label: `${version.name}${version.versionType === "release" ? "" : ` · ${version.versionType}`}`,
                 })),
               ]}
-              onopen={() => loadSearchVersions(mod.projectId)}
-              onchange={(value) => changeSearchVersion(mod.projectId, String(value))}
-              disabled={busyProjectId === mod.projectId}
+              onopen={() => loadSearchVersions(mod)}
+              onchange={(value) => changeSearchVersion(mod, String(value))}
+              disabled={packInstalled.has(mod.projectId) || busyProjectId === mod.projectId}
               ariaLabel={`Version of ${mod.title} for Minecraft ${instance.minecraftVersion}`}
               class="min-w-0 flex-1 text-[10px] text-[#c8e5f7]"
             />
             <button
               onclick={() => toggleSearchResult(mod)}
-              disabled={busyProjectId === mod.projectId}
-              class="mc-secondary flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs font-bold text-cyan-50 disabled:cursor-wait disabled:opacity-50"
+              disabled={packInstalled.has(mod.projectId) || busyProjectId === mod.projectId}
+              class="{mod.projectType === 'mod' && installed.has(mod.projectId)
+                ? 'mc-remove'
+                : 'mc-secondary text-white'} flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs font-bold disabled:cursor-wait disabled:opacity-50"
               >{busyProjectId === mod.projectId
                 ? "Working…"
-                : installed.has(mod.projectId)
-                  ? "Remove"
-                  : "Add"}</button
+                : packInstalled.has(mod.projectId)
+                  ? "Managed"
+                  : mod.projectType === "mod" && installed.has(mod.projectId)
+                    ? "Remove"
+                    : installedContent.has(mod.projectId)
+                      ? "Update"
+                      : "Install"}</button
             >
           </div>
         </article>{/each}

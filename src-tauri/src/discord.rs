@@ -2,7 +2,7 @@ use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use std::sync::Mutex;
 
 const APPLICATION_ID: &str = "1539265650395189348";
-const LOGO_URL: &str = "https://raw.githubusercontent.com/blackNinja46/NinjaLauncher/main/static/brand/ninja-launcher-app-icon.png";
+const LOGO_URL: &str = "https://raw.githubusercontent.com/blackNinja46/NinjaLauncher/main/static/brand/Ninja-launcher-discord-icon.png";
 
 struct PresenceState {
     enabled: bool,

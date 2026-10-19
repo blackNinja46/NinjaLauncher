@@ -1,7 +1,11 @@
-export type NavigationItem = "home" | "mods" | "modpacks" | "instances" | "logs" | "settings";
+export type NavigationItem =
+  "home" | "skins" | "mods" | "modpacks" | "instances" | "logs" | "settings";
 export type Theme = "dark" | "light" | "system";
 
 export interface LauncherSettings {
+  setupComplete: boolean;
+  installationPath: string | null;
+  termsAcceptedAt: string | null;
   allocatedMemoryMb: number;
   javaPath: string | null;
   downloadConcurrency: number;
@@ -11,14 +15,83 @@ export interface LauncherSettings {
   showSnapshots: boolean;
   language: string;
   theme: Theme;
+  animationsEnabled: boolean;
+  parallaxEnabled: boolean;
+  halloweenThemeEnabled: boolean;
+  halloweenSoundsEnabled: boolean;
   checkForUpdates: boolean;
   discordRichPresence: boolean;
+  shareAnonymousUsageData: boolean;
+}
+
+export interface SetupPaths {
+  recommendedInstallationPath: string;
+  minecraftDirectory: string | null;
+}
+
+export interface MinecraftImportReport {
+  copiedFiles: number;
+  skippedFiles: number;
 }
 
 export interface LauncherOverview {
   appDataDirectory: string;
   instanceCount: number;
   version: string;
+}
+
+export interface SystemMemoryInfo {
+  totalMb: number;
+  recommendedMaxMb: number;
+}
+
+export interface JavaRuntimeInfo {
+  path: string;
+  version: string;
+  major: number;
+  source: string;
+}
+
+export interface RemoteLauncherConfiguration {
+  maintenanceEnabled: boolean;
+  maintenanceActive: boolean;
+  maintenanceMessage: string;
+  maintenanceStartsAt: string | null;
+  maintenanceEndsAt: string | null;
+  registrationEnabled: boolean;
+  recommendedMinecraftVersion: string | null;
+  minimumSupportedLauncherVersion: string | null;
+  latestLauncherVersion: string | null;
+  launcherHomeAnnouncementsEnabled: boolean;
+  launcherNotificationsEnabled: boolean;
+  enabledFeatures: string[];
+  updatedAt: string;
+}
+
+export interface ClientAnnouncement {
+  id: string;
+  title: string;
+  message: string;
+  type: "INFO" | "UPDATE" | "MAINTENANCE" | "WARNING";
+  priority: "LOW" | "NORMAL" | "HIGH" | "CRITICAL";
+  startsAt: string | null;
+  endsAt: string | null;
+  displayTypes: ("HOME_NEWS" | "NOTIFICATION" | "BANNER" | "MODAL" | "CRITICAL_ALERT")[];
+}
+
+export interface ClientMinecraftVersion {
+  version: string;
+  recommended: boolean;
+  releaseType: "RELEASE" | "SNAPSHOT";
+  loaders: { type: "FABRIC" | "NEOFORGE" | "FORGE" | "VANILLA"; version: string }[];
+}
+
+export interface ClientBootstrap {
+  generatedAt: string;
+  configuration: RemoteLauncherConfiguration;
+  announcements: ClientAnnouncement[];
+  minecraftVersions: ClientMinecraftVersion[];
+  latestRelease: { version: string; buildNumber: number; mandatory: boolean } | null;
 }
 
 export interface SelectedMod {
@@ -30,14 +103,37 @@ export interface SelectedMod {
   versionOverrides: Record<string, string>;
 }
 
+export interface InstalledModFile {
+  name: string;
+  fileName: string;
+  sizeBytes: number;
+  projectId: string | null;
+  versionId: string | null;
+  enabled: boolean;
+  local: boolean;
+}
+
 export interface LauncherInstance {
   id: string;
   name: string;
   minecraftVersion: string;
-  loader: "fabric";
+  loader: "fabric" | "vanilla";
   loaderVersion: string;
   mods: SelectedMod[];
   modpack?: InstalledModpack;
+}
+
+export type ProfileContentKind = "resourcepacks" | "shaderpacks";
+
+export interface ProfileContentFile {
+  name: string;
+  fileName: string;
+  sizeBytes: number | null;
+  directory: boolean;
+  projectId: string | null;
+  versionId: string | null;
+  iconUrl: string | null;
+  enabled: boolean | null;
 }
 
 export interface InstalledModpack {
@@ -61,7 +157,8 @@ export interface ModpackInstallation {
   projectId: string;
   name: string;
   iconUrl: string | null;
-  phase: "installing" | "failed";
+  source?: "modrinth" | "file";
+  phase: "installing" | "failed" | "complete";
   error?: string;
 }
 
@@ -94,6 +191,7 @@ export interface FabricLoaderVersionOption {
 
 export interface ModrinthHit {
   projectId: string;
+  projectType: "mod" | "modpack" | "resourcepack" | "shader";
   slug: string;
   title: string;
   description: string;
@@ -108,6 +206,15 @@ export interface ModrinthProject {
   slug: string;
   title: string;
   iconUrl: string | null;
+  projectType: string;
+  description: string;
+  body: string;
+  downloads: number;
+  followers: number;
+  categories: string[];
+  gallery: { url: string; title: string | null; description: string | null }[];
+  published: string;
+  updated: string;
 }
 export interface ModrinthVersion {
   id: string;
@@ -136,6 +243,21 @@ export interface AccountState {
   accounts: Account[];
   activeUuid: string | null;
 }
+export interface NetworkRank {
+  name: string;
+  displayName: string;
+  prefix: string;
+  icon: string | null;
+  color: string | null;
+  weight: number;
+  primary: boolean;
+}
+export interface PlayerRanks {
+  uuid: string;
+  username: string | null;
+  primaryGroup: string;
+  ranks: NetworkRank[];
+}
 export interface DeviceCode {
   device_code: string;
   user_code: string;
@@ -145,6 +267,47 @@ export interface DeviceCode {
   message: string;
 }
 export interface GameLogEntry {
+  instanceId: string;
   stream: "stdout" | "stderr";
   line: string;
+}
+
+export interface InstanceConsole {
+  id: string;
+  name: string;
+  minecraftVersion: string;
+  loader: LauncherInstance["loader"];
+  logs: GameLogEntry[];
+  running: boolean;
+}
+
+export interface GameCrashDetails {
+  reportId: string;
+  instanceId: string;
+  profileName: string;
+  minecraftVersion: string;
+  exitCode: number | null;
+  title: string;
+  message: string;
+  suggestion: string;
+  technicalDetail: string | null;
+  logExcerpt: string[];
+  uploadLogExcerpt?: string[];
+  repairAvailable?: boolean;
+}
+
+export interface CrashReportSubmission {
+  clientReportId: string;
+  profileId: string;
+  profileName: string;
+  minecraftVersion: string;
+  loader: LauncherInstance["loader"];
+  accountUuid: string | null;
+  accountName: string | null;
+  exitCode: number | null;
+  title: string;
+  message: string;
+  suggestion: string;
+  technicalDetail: string | null;
+  logExcerpt: string[];
 }
