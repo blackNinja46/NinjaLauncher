@@ -3,6 +3,7 @@
   import SettingRow from "./SettingRow.svelte";
   import Toggle from "$lib/components/ui/Toggle.svelte";
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
+  import MemoryRange from "$lib/components/ui/MemoryRange.svelte";
   import { onMount } from "svelte";
   import type { JavaRuntimeInfo, LauncherOverview, LauncherSettings } from "$lib/types";
   import {
@@ -127,26 +128,7 @@
     </h2>
     <div class="mc-panel overflow-hidden">
       <SettingRow title="Allocated memory" description={memoryDetection}>
-        <div class="w-[min(28rem,46vw)]">
-          <div class="mb-2 flex items-center justify-between gap-3">
-            <span class="text-xs font-bold text-[var(--color-text-primary)]"
-              >{formatMemory(settings.allocatedMemoryMb)}</span
-            >
-            <span class="text-[9px] uppercase tracking-wider text-[var(--color-text-faint)]"
-              >1 GB – {formatMemory(memoryMaxMb)}</span
-            >
-          </div>
-          <input
-            type="range"
-            min="1024"
-            max={memoryMaxMb}
-            step="512"
-            value={settings.allocatedMemoryMb}
-            oninput={(event) => (settings.allocatedMemoryMb = Number(event.currentTarget.value))}
-            aria-label="Allocated memory"
-            class="memory-slider w-full accent-[var(--color-primary)]"
-          />
-        </div>
+        <MemoryRange bind:value={settings.allocatedMemoryMb} max={memoryMaxMb} />
       </SettingRow>
       <SettingRow
         title="Java runtime"

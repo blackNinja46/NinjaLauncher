@@ -90,10 +90,11 @@ async fn resolve_pass(
             validate_exact_version(&version, &project_id, game, loader)?;
             version
         } else {
-            select_preferred(
-                client.versions(&project_id, game, loader).await?,
-                &project_id,
-            )?
+            let versions = client.versions(&project_id, game, loader).await?;
+            match select_preferred(versions) {
+                Some(version) => version,
+                None => return Err(incompatible_project_error(client, &project_id).await),
+            }
         };
 
         for dependency in &version.dependencies {
@@ -125,20 +126,35 @@ async fn resolve_pass(
     Ok((resolved, discovered_exact_versions))
 }
 
-fn select_preferred(
-    mut versions: Vec<ProjectVersion>,
-    project_id: &str,
-) -> Result<ProjectVersion, CommandError> {
+fn select_preferred(mut versions: Vec<ProjectVersion>) -> Option<ProjectVersion> {
     if versions.is_empty() {
-        return Err(CommandError::new(format!(
-            "No compatible version was found for mod {project_id}."
-        )));
+        return None;
     }
     let preferred = versions
         .iter()
         .position(|version| version.version_type == "release")
         .unwrap_or(0);
-    Ok(versions.remove(preferred))
+    Some(versions.remove(preferred))
+}
+
+async fn incompatible_project_error(client: &ModrinthClient, project_id: &str) -> CommandError {
+    let project_ids = [project_id.to_string()];
+    let title = client
+        .projects(&project_ids)
+        .await
+        .ok()
+        .and_then(|projects| projects.into_iter().next())
+        .map(|project| project.title)
+        .filter(|title| !title.trim().is_empty());
+
+    match title {
+        Some(title) => CommandError::new(format!(
+            "No compatible version was found for {title} (Modrinth project {project_id})."
+        )),
+        None => CommandError::new(format!(
+            "No compatible version was found for mod {project_id}."
+        )),
+    }
 }
 
 fn validate_exact_version(

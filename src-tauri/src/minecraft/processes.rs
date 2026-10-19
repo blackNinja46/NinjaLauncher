@@ -1,4 +1,8 @@
-use crate::{error::CommandError, storage::paths::PathManager};
+use crate::{
+    error::CommandError,
+    process::{hide_std_console, hide_tokio_console},
+    storage::paths::PathManager,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, process::Command, sync::Mutex};
 
@@ -82,15 +86,20 @@ impl GameProcesses {
             ));
         }
         #[cfg(windows)]
-        let status = tokio::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()
-            .await?;
+        let status = {
+            let mut command = tokio::process::Command::new("taskkill");
+            hide_tokio_console(&mut command);
+            command
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .status()
+                .await?
+        };
         #[cfg(not(windows))]
-        let status = tokio::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .await?;
+        let status = {
+            let mut command = tokio::process::Command::new("kill");
+            hide_tokio_console(&mut command);
+            command.args(["-TERM", &pid.to_string()]).status().await?
+        };
         if !status.success() {
             return Err(CommandError::new("Minecraft could not be stopped."));
         }
@@ -115,7 +124,9 @@ impl GameProcesses {
 
 #[cfg(not(windows))]
 fn process_matches_profile(pid: u32, instance_id: &str) -> bool {
-    Command::new("ps")
+    let mut command = Command::new("ps");
+    hide_std_console(&mut command);
+    command
         .args(["-p", &pid.to_string(), "-o", "command="])
         .output()
         .ok()
@@ -129,8 +140,16 @@ fn process_matches_profile(pid: u32, instance_id: &str) -> bool {
 #[cfg(windows)]
 fn process_matches_profile(pid: u32, instance_id: &str) -> bool {
     let query = format!("(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine");
-    Command::new("powershell")
-        .args(["-NoProfile", "-Command", &query])
+    let mut command = Command::new("powershell");
+    hide_std_console(&mut command);
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &query,
+        ])
         .output()
         .ok()
         .filter(|output| output.status.success())

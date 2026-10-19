@@ -10,6 +10,7 @@ mod loaders;
 mod minecraft;
 mod modrinth;
 mod network;
+mod process;
 mod storage;
 
 use storage::paths::PathManager;

@@ -599,12 +599,17 @@
   function createLaunchFailureDetails(instanceId: string, detail: string): GameCrashDetails {
     const failedProfile = instances.find((item) => item.id === instanceId);
     const javaProblem = /java|runtime|jdk|jre|architecture|rosetta/i.test(detail);
-    const incompatibleModId = detail.match(
+    const namedIncompatibleMod = detail.match(
+      /No compatible version was found for (.+?) \(Modrinth project ([A-Za-z0-9_-]+)\)\.?/i,
+    );
+    const legacyIncompatibleMod = detail.match(
       /No compatible version was found for mod ([A-Za-z0-9_-]+)/i,
-    )?.[1];
+    );
+    const incompatibleModId = namedIncompatibleMod?.[2] ?? legacyIncompatibleMod?.[1];
     const incompatibleMod = incompatibleModId
       ? failedProfile?.mods.find((item) => item.projectId === incompatibleModId)
       : null;
+    const incompatibleModName = namedIncompatibleMod?.[1] ?? incompatibleMod?.name;
     const loaderName = failedProfile?.loader === "fabric" ? "Fabric" : failedProfile?.loader;
     const compatibilityProblem = Boolean(incompatibleModId);
     return {
@@ -615,7 +620,7 @@
       exitCode: null,
       title: compatibilityProblem ? "Incompatible mod" : "Minecraft could not start",
       message: compatibilityProblem
-        ? `${incompatibleMod?.name ?? incompatibleModId} is not available for Minecraft ${failedProfile?.minecraftVersion ?? "this version"}${loaderName ? ` with ${loaderName}` : ""}, so Minecraft was not started.`
+        ? `${incompatibleModName ?? "A required mod"} is not available for Minecraft ${failedProfile?.minecraftVersion ?? "this version"}${loaderName ? ` with ${loaderName}` : ""}, so Minecraft was not started.`
         : "The launcher could not complete the startup process for this profile.",
       suggestion: compatibilityProblem
         ? "Repair the profile to disable the incompatible mod for this Minecraft version, then launch again. The mod will not be deleted."
@@ -862,8 +867,9 @@
           line: `[Ninja Launcher] Launch failed: ${message}`,
         },
       ];
-      crashDetails = createLaunchFailureDetails(launchingId, message);
-      showToast({ title: "Minecraft could not start", message, tone: "error" });
+      const launchFailure = createLaunchFailureDetails(launchingId, message);
+      crashDetails = launchFailure;
+      showToast({ title: launchFailure.title, message: launchFailure.message, tone: "error" });
       if (settings.showLogsOnLaunch) activePage = "logs";
     }
   }
