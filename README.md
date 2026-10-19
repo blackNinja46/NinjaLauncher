@@ -1,8 +1,10 @@
 <div align="center">
-  <img src="static/brand/ninja-launcher-wordmark.png" alt="Ninja Launcher" width="760">
+  <img src="docs/ninja-launcher-v2-banner.png" alt="Ninja Launcher 2.0" width="100%">
 
-  <p>A modern, Minecraft-inspired launcher for Minecraft: Java Edition.</p>
+  <h1>Ninja Launcher 2.0</h1>
+  <p>A modern desktop launcher for Minecraft: Java Edition.</p>
 
+[![Release](https://img.shields.io/badge/release-2.0-5B8CFF)](https://github.com/blackNinja46/NinjaLauncher/releases/latest)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![Rust](https://img.shields.io/badge/backend-Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Svelte 5](https://img.shields.io/badge/frontend-Svelte_5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/)
@@ -14,18 +16,42 @@
 </div>
 
 > [!IMPORTANT]
-> Ninja Launcher is under active development. Back up important worlds before using development
-> builds and please report reproducible problems through GitHub Issues.
+> Ninja Launcher 2.0 is under active development. Back up important worlds before testing a new
+> release and report reproducible problems through GitHub Issues.
 
-## About
+## What is Ninja Launcher?
 
-Ninja Launcher is a cross-platform desktop launcher for Minecraft: Java Edition. It combines
-isolated Fabric instances, Modrinth integration, automatic Java management, Microsoft account
-support, game logs, and launcher updates in one lightweight native application.
+Ninja Launcher is a cross-platform launcher for Minecraft: Java Edition. Version 2.0 combines
+isolated Fabric and Vanilla profiles, Modrinth content, automatic Java management, Microsoft
+accounts, multi-instance consoles, crash assistance, Dashboard-controlled content, and signed
+launcher updates in one native application.
 
-The interface is built with Svelte 5 and TypeScript, while downloads, authentication, instance
-management, dependency resolution, and game launching are handled by a Rust backend through
+The interface is built with Svelte 5 and TypeScript. Authentication, downloads, dependency
+resolution, profile storage, Java setup, and game launching are handled by a Rust backend through
 Tauri 2.
+
+## Highlights in 2.0
+
+- **Redesigned home screen** with a rotatable 3D Minecraft skin, cape support, rank-aware nametag,
+  profile selection, launch progress, and a visual Minecraft version picker.
+- **Fabric and Vanilla profiles** with isolated game directories, flexible RAM allocation, custom
+  Java runtimes, import/export tools, and editable copies of Modrinth modpacks.
+- **Unified content management** for mods, resource packs, and shader packs, including local
+  drag-and-drop files, enable/disable controls, type filters, and compatible version selection.
+- **Full Modrinth browser** with search sorting, formatted project descriptions, galleries,
+  versions, dependencies, and installation into the selected profile.
+- **Improved launching and recovery** with managed Java runtimes, clearer Fabric diagnostics,
+  automatic repair, rich crash dialogs, copyable reports, and optional Dashboard uploads.
+- **Running-instance controls** in the title bar plus a separate console for every active Minecraft
+  process.
+- **Dashboard integration** for Minecraft catalogs, announcements, notification banners,
+  maintenance mode, feature flags, ranks, and launcher releases.
+- **New setup experience** for installation path, `.minecraft` import, Microsoft sign-in, privacy,
+  appearance, accessibility, and the final launcher assembly animation.
+- **Seasonal themes** such as the Dashboard-controlled Halloween event with an animated 3D scene
+  and optional ambient sound effects.
+- **Native platform polish** with dedicated macOS and Windows application icons, light/dark/system
+  themes, reduced-animation support, and a custom title bar.
 
 ## Screenshots
 
@@ -36,73 +62,60 @@ Tauri 2.
 <table>
   <tr>
     <td width="33%" valign="top">
-      <img src="docs/screenshots/instances.png" alt="Ninja Launcher instance management">
-      <br><sub><b>Isolated instances</b> with quick actions.</sub>
+      <img src="docs/screenshots/instances.png" alt="Ninja Launcher profile management">
+      <br><sub><b>Profiles</b> for isolated Fabric, Vanilla, and modpack installations.</sub>
     </td>
     <td width="33%" valign="top">
-      <img src="docs/screenshots/modpacks.png" alt="Ninja Launcher Modrinth modpack search">
-      <br><sub><b>Modrinth modpacks</b> filtered by Minecraft version.</sub>
+      <img src="docs/screenshots/modpacks.png" alt="Ninja Launcher Modrinth browser">
+      <br><sub><b>Modrinth</b> content matched to the selected Minecraft version.</sub>
     </td>
     <td width="33%" valign="top">
-      <img src="docs/screenshots/accounts.png" alt="Ninja Launcher Microsoft account manager">
-      <br><sub><b>Microsoft accounts</b> through secure device-code sign-in.</sub>
+      <img src="docs/screenshots/skins.png" alt="Ninja Launcher skin management">
+      <br><sub><b>Skins and capes</b> with interactive previews and quick switching.</sub>
     </td>
   </tr>
 </table>
 
-## Features
+## Minecraft and profile support
 
-- **Multiple Minecraft accounts** — add Microsoft accounts, switch instantly, and remove them
-  independently.
-- **Isolated instances** — create, duplicate, configure, and delete separate Minecraft
-  installations.
-- **Minecraft launching** — downloads the official client, libraries, assets, and Fabric profile,
-  then starts the selected instance.
-- **Automatic Java setup** — detects a compatible Java runtime and installs a managed runtime when
-  the required version is missing.
-- **Modrinth mod browser** — searches compatible Fabric mods, displays project icons, and links to
-  the corresponding Modrinth pages.
-- **Mod management** — enable, disable, remove, and select a version override for each Minecraft
-  version.
-- **Dependency and conflict checks** — resolves required dependencies and highlights incompatible
-  mod combinations before launch.
-- **Modrinth modpacks** — searches for and installs compatible `.mrpack` Fabric modpacks into new
-  managed instances.
-- **Readable game logs** — optional launch-time log view with colors, category filters, and cleaned
-  Log4j XML wrappers.
-- **Demo mode** — test installation and launching without signing in.
-- **Automatic launcher updates** — checks signed GitHub releases, installs an available update, and
-  restarts the launcher.
-- **Platform-specific desktop experience** — native macOS icon treatment and a custom Windows title
-  bar without the extra Minecraft console window.
+- **Fabric:** versions are sourced from the Fabric and Dashboard catalogs and sorted automatically.
+- **Vanilla:** supported releases are available down through Minecraft 1.15.
+- **Modrinth modpacks:** install `.mrpack` profiles directly or import a local pack by drag and
+  drop. Pack-managed content is protected; create an editable copy before changing it.
+- **Content:** compatible mods, resource packs, and shader packs can be installed from Modrinth or
+  added locally.
 
-## Supported Minecraft versions
-
-Ninja Launcher currently supports Fabric instances for:
-
-- `1.21.11`
-- `26.1`
-- `26.1.1`
-- `26.1.2`
-- `26.2`
-
-Forge, NeoForge, Quilt, and vanilla-only instances are not supported yet.
+Forge, NeoForge, Quilt, and Lunar Client profiles are not currently supported.
 
 ## Download
 
-Prebuilt installers are published on the
+Installers are published on the
 [GitHub Releases page](https://github.com/blackNinja46/NinjaLauncher/releases):
 
 - **macOS:** `.dmg` for Apple Silicon and Intel Macs
 - **Windows:** NSIS setup `.exe` for 64-bit Windows
 
-You need a Microsoft account that owns Minecraft: Java Edition for normal play. The built-in demo
-mode can be used without an account.
+Normal play requires a Microsoft account that owns Minecraft: Java Edition. Demo mode can be used
+without an account for supported local testing.
 
 > [!NOTE]
-> Unsigned development builds can trigger Windows SmartScreen or a macOS security warning. Official
-> public releases should be code-signed and macOS builds should be notarized before broad
-> distribution.
+> Unsigned development builds can trigger Windows SmartScreen or a macOS security warning. Public
+> releases should be code-signed, and macOS builds should be notarized before broad distribution.
+
+## Automatic updates
+
+Installed desktop builds can check for updates automatically at startup. The updater:
+
+1. reads `latest.json` from the latest published GitHub release;
+2. verifies the downloaded platform artifact with the updater public key embedded in the app;
+3. downloads and installs the update; and
+4. restarts Ninja Launcher.
+
+Update checks can be disabled under **Settings → Application → Check for updates**. Development
+builds started with `bun tauri dev` and the browser-only frontend do not install updates.
+
+Only a published, non-draft stable GitHub release is served through `/releases/latest`. Draft and
+prerelease builds therefore do not form a separate beta update channel.
 
 ## Development
 
@@ -111,7 +124,7 @@ mode can be used without an account.
 - [Bun](https://bun.sh/)
 - [Rust stable](https://www.rust-lang.org/tools/install)
 - The platform dependencies from the
-  [official Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/)
+  [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/)
   - macOS: Xcode Command Line Tools (`xcode-select --install`)
   - Windows: Microsoft C++ Build Tools with **Desktop development with C++** and WebView2
 
@@ -136,10 +149,10 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## Build installers
+## Building installers
 
-Installers should normally be built on their target operating system. The included GitHub Actions
-workflow builds both macOS architectures and a Windows NSIS installer automatically.
+Installers should be built on their target operating system. The release workflow builds Apple
+Silicon macOS, Intel macOS, and Windows x64 artifacts.
 
 ### macOS
 
@@ -148,62 +161,31 @@ bun install --frozen-lockfile
 bun tauri build --bundles app,dmg
 ```
 
-The artifacts are written below `src-tauri/target/release/bundle/`.
-
 ### Windows
-
-Run the following in PowerShell or Windows Terminal:
 
 ```powershell
 bun install --frozen-lockfile
 bun tauri build --bundles nsis
 ```
 
-The setup executable is written below `src-tauri\target\release\bundle\nsis\`.
+Generated bundles are stored below `src-tauri/target/release/bundle/`.
 
-Building a Windows installer directly on macOS is possible but requires additional cross-compiling
-tools and has limitations. Using a Windows machine or the included GitHub Actions workflow is the
-recommended route. See the
-[official Tauri Windows installer guide](https://v2.tauri.app/distribute/windows-installer/) for
-details.
+## Publishing a 2.x release
 
-## Microsoft authentication
-
-Ninja Launcher uses Microsoft's OAuth device-code flow. The launcher never asks for or receives a
-Microsoft password. After authentication it verifies the Xbox identity, Minecraft entitlement, and
-Java Edition profile.
-
-The application includes a public desktop OAuth client ID, so end users do not need to create their
-own Microsoft Entra application. No client secret is embedded. Launcher maintainers can replace the
-ID at compile time:
-
-```sh
-NINJA_MICROSOFT_CLIENT_ID="your-client-id" bun tauri build
-```
-
-An app registration must be configured correctly and approved for access to Minecraft Services;
-an ordinary Entra client ID alone is not sufficient.
-
-## Automatic updates and releases
-
-The release workflow is triggered by tags matching `app-v*` and creates draft GitHub releases for:
-
-- macOS Apple Silicon
-- macOS Intel
-- Windows x64 (NSIS)
-
-Before publishing a release:
+The GitHub Actions release workflow runs for tags matching `app-v*` and initially creates a draft
+release.
 
 1. Set the same semantic version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json`.
-2. Add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to the repository's
-   GitHub Actions secrets.
-3. Keep the private updater key and its password backed up securely and never commit them.
-4. Commit the version change and push a matching tag, for example `app-v0.2.0`.
-5. Test the generated installers, then publish the draft release.
+2. Configure `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as GitHub Actions
+   secrets. The private key must match the public key in `src-tauri/tauri.conf.json`.
+3. Push a matching tag, for example `app-v2.0.0`.
+4. Test the generated macOS and Windows installers.
+5. Publish the draft release and confirm that it contains `latest.json`, the updater archives, and
+   their `.sig` files.
 
-Installed launchers with update checks enabled read the signed update manifest from the latest
-published GitHub release.
+Existing installations will only discover the release after the draft has been published. Never
+commit the updater private key or its password.
 
 ## Project structure
 
@@ -212,10 +194,10 @@ NinjaLauncher/
 ├── src/                  # Svelte frontend and Tauri API bindings
 ├── src-tauri/src/        # Rust launcher backend
 ├── src-tauri/icons/      # Platform application icons
-├── static/brand/         # Launcher branding
-├── docs/screenshots/     # README screenshots
-├── scripts/              # Asset generation utilities
-└── .github/workflows/    # Cross-platform release automation
+├── static/               # Runtime images, audio, and version artwork
+├── docs/                 # Screenshots and Dashboard documentation
+├── scripts/              # Asset and icon generation utilities
+└── .github/workflows/    # Release automation
 ```
 
 ## Data and privacy
@@ -223,27 +205,29 @@ NinjaLauncher/
 - Account tokens and launcher settings are stored locally in the operating system's application
   data directory.
 - Microsoft passwords never pass through Ninja Launcher.
-- Network requests are made to Microsoft/Xbox/Minecraft services, Mojang metadata and asset hosts,
-  Modrinth, Java runtime distribution hosts, and GitHub Releases as required by the selected action.
-- Removing an account from the launcher deletes its locally stored tokens.
+- Anonymous usage data is controlled in the launcher settings.
+- Network requests are made to Microsoft, Xbox, Minecraft, Mojang, Fabric, Modrinth, Java runtime
+  providers, the configured Ninja Dashboard, and GitHub Releases when required.
+- Removing an account deletes its locally stored tokens.
 
-Do not share `account.json`; it contains authentication tokens.
+Do not share account storage or copied crash reports without reviewing them first; they can contain
+profile names, paths, and technical environment information.
 
 ## Contributing
 
 Bug reports and focused pull requests are welcome. Before opening a pull request:
 
-1. Explain the problem and the intended behavior.
+1. Explain the problem and expected behavior.
 2. Keep unrelated changes out of the pull request.
-3. Run the frontend checks and Rust tests listed above.
-4. Never commit account data, signing keys, access tokens, or downloaded game files.
+3. Run the frontend and Rust quality checks.
+4. Never commit accounts, signing keys, access tokens, or downloaded game files.
 
 ## Disclaimer
 
-Ninja Launcher is an independent, unofficial project. It is not affiliated with, endorsed by, or
-approved by Microsoft, Mojang Studios, Minecraft, Fabric, or Modrinth. Minecraft is a trademark of
-Microsoft Corporation. Users are responsible for complying with the Minecraft EULA and the terms
-of every service used by the launcher.
+Ninja Launcher is an independent, unofficial project. It is not affiliated with or endorsed by
+Microsoft, Mojang Studios, Minecraft, Fabric, or Modrinth. Minecraft is a trademark of Microsoft
+Corporation. Users are responsible for following the Minecraft EULA and the terms of every service
+used by the launcher.
 
 ## License
 

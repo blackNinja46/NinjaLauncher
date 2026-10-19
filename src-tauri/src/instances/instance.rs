@@ -4,9 +4,12 @@ use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_MINECRAFT_VERSION: &str = "26.2";
 pub const DEFAULT_FABRIC_VERSION: &str = "0.19.3";
-const FALLBACK_MINECRAFT_VERSIONS: [&str; 16] = [
+const FALLBACK_FABRIC_VERSIONS: [&str; 47] = [
     "26.2", "26.1.2", "26.1.1", "26.1", "1.21.11", "1.21.10", "1.21.9", "1.21.8", "1.21.7",
-    "1.21.6", "1.21.5", "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21",
+    "1.21.6", "1.21.5", "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.5",
+    "1.20.4", "1.20.3", "1.20.2", "1.20.1", "1.20", "1.19.4", "1.19.3", "1.19.2", "1.19.1", "1.19",
+    "1.18.2", "1.18.1", "1.18", "1.17.1", "1.17", "1.16.5", "1.16.4", "1.16.3", "1.16.2", "1.16.1",
+    "1.16", "1.15.2", "1.15.1", "1.15", "1.14.4", "1.14.3", "1.14.2", "1.14.1", "1.14",
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -34,6 +37,18 @@ struct FabricGameVersion {
 struct FabricLoaderVersionResponse {
     version: String,
     stable: bool,
+}
+
+#[derive(Deserialize)]
+struct MojangVersionManifest {
+    versions: Vec<MojangVersion>,
+}
+
+#[derive(Deserialize)]
+struct MojangVersion {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
 }
 
 pub async fn loader_versions() -> Vec<FabricLoaderVersionOption> {
@@ -81,7 +96,27 @@ async fn fetch_loader_versions() -> Result<Vec<FabricLoaderVersionOption>, Comma
 pub async fn supported_versions() -> Vec<SupportedVersion> {
     fetch_supported_versions()
         .await
-        .unwrap_or_else(|_| fallback_versions())
+        .unwrap_or_else(|_| fallback_fabric_versions())
+}
+
+pub async fn vanilla_versions() -> Vec<SupportedVersion> {
+    fetch_vanilla_versions()
+        .await
+        .unwrap_or_else(|_| fallback_vanilla_versions())
+}
+
+async fn fetch_vanilla_versions() -> Result<Vec<SupportedVersion>, CommandError> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("NinjaLauncher/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let manifest: MojangVersionManifest = client
+        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    relevant_vanilla_versions(manifest.versions)
 }
 
 async fn fetch_supported_versions() -> Result<Vec<SupportedVersion>, CommandError> {
@@ -118,43 +153,71 @@ fn relevant_versions(
     loader: String,
 ) -> Result<Vec<SupportedVersion>, CommandError> {
     let mut versions = Vec::new();
-    let mut found_latest_release = false;
+    let mut seen = HashSet::new();
     for game in games {
-        if game.stable {
-            found_latest_release = true;
-            versions.push(SupportedVersion {
-                minecraft_version: game.version.clone(),
-                fabric_loader_version: loader.clone(),
-                version_type: "release".into(),
-            });
-        } else if !found_latest_release {
-            versions.push(SupportedVersion {
-                minecraft_version: game.version.clone(),
-                fabric_loader_version: loader.clone(),
-                version_type: "snapshot".into(),
-            });
+        if !is_valid_version_id(&game.version) || !seen.insert(game.version.clone()) {
+            continue;
         }
-        if game.version == "1.21" {
+        versions.push(SupportedVersion {
+            minecraft_version: game.version,
+            fabric_loader_version: loader.clone(),
+            version_type: if game.stable { "release" } else { "snapshot" }.into(),
+        });
+    }
+    if versions.is_empty() {
+        return Err(CommandError::new("Fabric returned no Minecraft versions."));
+    }
+    Ok(versions)
+}
+
+fn relevant_vanilla_versions(
+    manifest_versions: Vec<MojangVersion>,
+) -> Result<Vec<SupportedVersion>, CommandError> {
+    let mut versions = Vec::new();
+    let mut reached_oldest_supported_release = false;
+    for version in manifest_versions {
+        if !matches!(version.version_type.as_str(), "release" | "snapshot")
+            || !is_valid_version_id(&version.id)
+        {
+            continue;
+        }
+        let is_oldest_supported_release = version.id == "1.15";
+        versions.push(SupportedVersion {
+            minecraft_version: version.id,
+            fabric_loader_version: String::new(),
+            version_type: version.version_type,
+        });
+        if is_oldest_supported_release {
+            reached_oldest_supported_release = true;
             break;
         }
     }
-    if !versions
-        .iter()
-        .any(|version| version.minecraft_version == "1.21")
-    {
+    if !reached_oldest_supported_release {
         return Err(CommandError::new(
-            "Fabric did not return the supported Minecraft version range.",
+            "Mojang did not return the supported Vanilla version range through 1.15.",
         ));
     }
     Ok(versions)
 }
 
-fn fallback_versions() -> Vec<SupportedVersion> {
-    FALLBACK_MINECRAFT_VERSIONS
+fn fallback_fabric_versions() -> Vec<SupportedVersion> {
+    FALLBACK_FABRIC_VERSIONS
         .iter()
         .map(|minecraft_version| SupportedVersion {
             minecraft_version: (*minecraft_version).into(),
             fabric_loader_version: DEFAULT_FABRIC_VERSION.into(),
+            version_type: "release".into(),
+        })
+        .collect()
+}
+
+fn fallback_vanilla_versions() -> Vec<SupportedVersion> {
+    FALLBACK_FABRIC_VERSIONS
+        .iter()
+        .take_while(|minecraft_version| **minecraft_version != "1.14.4")
+        .map(|minecraft_version| SupportedVersion {
+            minecraft_version: (*minecraft_version).into(),
+            fabric_loader_version: String::new(),
             version_type: "release".into(),
         })
         .collect()
@@ -173,7 +236,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_current_snapshots_and_releases_from_1_21() {
+    fn keeps_every_version_supported_by_fabric() {
         let versions = relevant_versions(
             vec![
                 FabricGameVersion {
@@ -206,10 +269,41 @@ mod tests {
                 .iter()
                 .map(|version| version.minecraft_version.as_str())
                 .collect::<Vec<_>>(),
-            ["26.3-snapshot-2", "26.2", "1.21"]
+            ["26.3-snapshot-2", "26.2", "26.2-rc-1", "1.21", "1.20.6"]
         );
         assert_eq!(versions[0].version_type, "snapshot");
         assert_eq!(versions[1].version_type, "release");
+    }
+
+    #[test]
+    fn vanilla_versions_end_at_release_1_15() {
+        let versions = relevant_vanilla_versions(vec![
+            MojangVersion {
+                id: "1.16".into(),
+                version_type: "release".into(),
+            },
+            MojangVersion {
+                id: "20w06a".into(),
+                version_type: "snapshot".into(),
+            },
+            MojangVersion {
+                id: "1.15".into(),
+                version_type: "release".into(),
+            },
+            MojangVersion {
+                id: "1.14.4".into(),
+                version_type: "release".into(),
+            },
+        ])
+        .expect("vanilla versions");
+
+        assert_eq!(
+            versions
+                .iter()
+                .map(|version| version.minecraft_version.as_str())
+                .collect::<Vec<_>>(),
+            ["1.16", "20w06a", "1.15"]
+        );
     }
 
     #[test]

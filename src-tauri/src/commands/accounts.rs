@@ -16,6 +16,14 @@ pub fn get_accounts(paths: State<'_, PathManager>) -> Result<AccountState, Comma
 }
 
 #[tauri::command]
+pub async fn get_account_cape(
+    uuid: String,
+    paths: State<'_, PathManager>,
+) -> Result<Option<String>, CommandError> {
+    microsoft::cape_url(&paths, &uuid).await
+}
+
+#[tauri::command]
 pub async fn begin_microsoft_login() -> Result<DeviceCode, CommandError> {
     microsoft::begin().await
 }

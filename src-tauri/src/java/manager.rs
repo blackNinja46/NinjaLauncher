@@ -3,7 +3,7 @@ use crate::{
     error::CommandError,
     storage::paths::PathManager,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy)]
@@ -29,13 +29,60 @@ struct AdoptiumPackage {
     link: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaRuntimeInfo {
+    pub path: String,
+    pub version: String,
+    pub major: u32,
+    pub source: String,
+}
+
+pub async fn inspect_runtime(
+    paths: &PathManager,
+    configured: Option<&str>,
+) -> Result<JavaRuntimeInfo, CommandError> {
+    let explicitly_configured = configured.filter(|value| !value.trim().is_empty());
+    let mut candidates = Vec::new();
+    if let Some(value) = explicitly_configured {
+        candidates.push((java_from_setting(value), "Custom runtime"));
+    } else {
+        if let Ok(home) = std::env::var("JAVA_HOME") {
+            candidates.push((
+                PathBuf::from(home).join("bin").join(executable()),
+                "JAVA_HOME",
+            ));
+        }
+        candidates.push((PathBuf::from(executable()), "System PATH"));
+        if let Some(managed) = find_java(&paths.shared_dir().join("java"))? {
+            candidates.push((managed, "Ninja Launcher managed runtime"));
+        }
+    }
+    for (candidate, source) in candidates {
+        if let Some((version, major, _)) = runtime_details(&candidate).await {
+            return Ok(JavaRuntimeInfo {
+                path: candidate.to_string_lossy().into_owned(),
+                version,
+                major,
+                source: source.into(),
+            });
+        }
+    }
+    Err(CommandError::new(if explicitly_configured.is_some() {
+        "The selected Java executable could not be started or did not report a valid version."
+    } else {
+        "No working Java runtime was found. Ninja Launcher will install the required runtime automatically when the game starts."
+    }))
+}
+
 pub async fn select_or_install(
     client: &reqwest::Client,
     paths: &PathManager,
     configured: Option<&str>,
     required_major: u32,
+    required_arch: Option<&str>,
 ) -> Result<PathBuf, CommandError> {
-    let platform = platform()?;
+    let platform = platform(required_arch)?;
     let managed_dir = managed_dir(paths, required_major, platform);
     let mut candidates = Vec::new();
     if let Some(path) = configured.filter(|path| !path.trim().is_empty()) {
@@ -49,7 +96,7 @@ pub async fn select_or_install(
         candidates.push(managed);
     }
     for candidate in candidates {
-        if supports(&candidate, required_major).await {
+        if supports(&candidate, required_major, platform.arch).await {
             return Ok(candidate);
         }
     }
@@ -124,8 +171,13 @@ async fn install(
     let extracted_java = find_java(&staging)?.ok_or_else(|| {
         CommandError::new("The downloaded Java archive did not contain a Java executable.")
     })?;
-    if !supports(&extracted_java, required_major).await {
+    if !supports(&extracted_java, required_major, platform.arch).await {
         let _ = tokio::fs::remove_dir_all(&staging).await;
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) && platform.arch == "x64" {
+            return Err(CommandError::new(format!(
+                "Minecraft requires the Intel Java {required_major} compatibility runtime. Install Rosetta 2 and try again."
+            )));
+        }
         return Err(CommandError::new(format!(
             "The downloaded runtime is not compatible with Java {required_major}."
         )));
@@ -174,22 +226,35 @@ async fn latest_package(
         .map(|release| release.binary.package))
 }
 
-async fn supports(candidate: &Path, required_major: u32) -> bool {
+async fn supports(candidate: &Path, required_major: u32, required_arch: &str) -> bool {
+    runtime_details(candidate)
+        .await
+        .is_some_and(|(_, major, arch)| major == required_major && arch == required_arch)
+}
+
+async fn runtime_details(candidate: &Path) -> Option<(String, u32, &'static str)> {
     let mut command = tokio::process::Command::new(candidate);
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let Ok(output) = command.arg("-version").output().await else {
-        return false;
+    let Ok(output) = command
+        .args(["-XshowSettings:properties", "-version"])
+        .output()
+        .await
+    else {
+        return None;
     };
     if !output.status.success() {
-        return false;
+        return None;
     }
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-    parse_major(&text) == Some(required_major)
+    let version = parse_version(&text)?;
+    let major = parse_major(&text)?;
+    let arch = parse_arch(&text)?;
+    Some((version, major, arch))
 }
 
 fn extract_archive(archive: &Path, target: &Path, extension: &str) -> Result<(), CommandError> {
@@ -264,7 +329,7 @@ fn runtime_key(major: u32, platform: Platform) -> String {
     format!("temurin-{major}-{}-{}", platform.os, platform.arch)
 }
 
-fn platform() -> Result<Platform, CommandError> {
+fn platform(required_arch: Option<&str>) -> Result<Platform, CommandError> {
     let os = if cfg!(target_os = "windows") {
         "windows"
     } else if cfg!(target_os = "macos") {
@@ -276,7 +341,7 @@ fn platform() -> Result<Platform, CommandError> {
             "Automatic Java installation is not supported on this operating system.",
         ));
     };
-    let arch = if cfg!(target_arch = "aarch64") {
+    let native_arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
     } else if cfg!(target_arch = "x86_64") {
         "x64"
@@ -284,6 +349,17 @@ fn platform() -> Result<Platform, CommandError> {
         return Err(CommandError::new(
             "Automatic Java installation is not supported on this processor architecture.",
         ));
+    };
+    let arch = match required_arch {
+        None => native_arch,
+        Some("aarch64") if cfg!(target_arch = "aarch64") => "aarch64",
+        Some("x64") if cfg!(target_os = "macos") || cfg!(target_arch = "x86_64") => "x64",
+        Some(value) if value == native_arch => native_arch,
+        Some(_) => {
+            return Err(CommandError::new(
+                "The required Java processor architecture is not supported on this system.",
+            ));
+        }
     };
     Ok(Platform {
         os,
@@ -301,12 +377,46 @@ fn executable() -> &'static str {
 }
 
 fn parse_major(version: &str) -> Option<u32> {
-    let quoted = version.split('"').nth(1)?;
-    let first: u32 = quoted.split('.').next()?.parse().ok()?;
+    let parsed = parse_version(version)?;
+    let first: u32 = parsed.split('.').next()?.parse().ok()?;
     if first == 1 {
-        quoted.split('.').nth(1)?.parse().ok()
+        parsed.split('.').nth(1)?.parse().ok()
     } else {
         Some(first)
+    }
+}
+
+fn parse_version(output: &str) -> Option<String> {
+    if let Some(quoted) = output.split('"').nth(1).filter(|value| !value.is_empty()) {
+        return Some(quoted.into());
+    }
+    output
+        .lines()
+        .flat_map(str::split_whitespace)
+        .map(|token| {
+            token.trim_matches(|character: char| {
+                !character.is_ascii_alphanumeric() && character != '.'
+            })
+        })
+        .find(|token| {
+            token
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+                && token.contains('.')
+        })
+        .map(String::from)
+}
+
+fn parse_arch(output: &str) -> Option<&'static str> {
+    let value = output.lines().find_map(|line| {
+        let (key, value) = line.trim().split_once('=')?;
+        (key.trim() == "os.arch").then_some(value.trim())
+    })?;
+    match value {
+        "aarch64" | "arm64" => Some("aarch64"),
+        "x86_64" | "amd64" => Some("x64"),
+        _ => None,
     }
 }
 
@@ -318,7 +428,13 @@ mod tests {
     fn parses_java_versions() {
         assert_eq!(parse_major("java version \"1.8.0_402\""), Some(8));
         assert_eq!(parse_major("openjdk version \"21.0.2\""), Some(21));
-        assert_eq!(parse_major("openjdk 25.0.3 2026-04-21"), None);
+        assert_eq!(parse_major("openjdk 25.0.3 2026-04-21"), Some(25));
+    }
+
+    #[test]
+    fn parses_java_architectures() {
+        assert_eq!(parse_arch("    os.arch = aarch64"), Some("aarch64"));
+        assert_eq!(parse_arch("    os.arch = x86_64"), Some("x64"));
     }
 
     #[test]

@@ -1,22 +1,22 @@
 <script lang="ts">
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import PageHeader from "$lib/components/layout/PageHeader.svelte";
+  import ModrinthProjectDialog from "$lib/components/mods/ModrinthProjectDialog.svelte";
   import Icon from "$lib/components/ui/Icon.svelte";
   import CustomSelect from "$lib/components/ui/CustomSelect.svelte";
   import Pagination from "$lib/components/ui/Pagination.svelte";
   import { onMount } from "svelte";
   import {
     chooseModpackFile,
-    importModpackFile,
+    getModDetails,
     listModpackVersions,
     messageFromError,
     searchModpacks,
   } from "$lib/api/tauri";
   import type {
-    LauncherInstance,
     ModpackFileInspection,
     ModpackInstallation,
     ModrinthHit,
+    ModrinthProject,
     ModrinthVersion,
     SupportedVersion,
   } from "$lib/types";
@@ -25,12 +25,15 @@
     versions,
     installation,
     oninstall,
-    onimport,
+    onimportfile,
   }: {
     versions: SupportedVersion[];
     installation: ModpackInstallation | null;
     oninstall: (pack: ModrinthHit, versionId: string) => Promise<void>;
-    onimport: (instance: LauncherInstance) => Promise<void>;
+    onimportfile: (
+      inspection: ModpackFileInspection,
+      allowForeignMods: boolean,
+    ) => Promise<unknown>;
   } = $props();
 
   let query = $state("");
@@ -45,7 +48,9 @@
   let searchRequest = 0;
   let error = $state("");
   let inspection = $state<ModpackFileInspection | null>(null);
-  let importing = $state(false);
+  let importing = $derived(installation?.phase === "installing");
+  let selectedProject = $state<ModrinthHit | null>(null);
+  let selectedProjectDetails = $state<ModrinthProject | null>(null);
   let busyProjectId = $derived(installation?.phase === "installing" ? installation.projectId : "");
 
   async function loadPage(nextPage: number, searchQuery = query) {
@@ -119,10 +124,15 @@
     }
   }
 
-  async function openProject(slug: string) {
-    const url = `https://modrinth.com/modpack/${encodeURIComponent(slug)}`;
-    if ("__TAURI_INTERNALS__" in window) await openUrl(url);
-    else window.open(url, "_blank", "noopener,noreferrer");
+  async function openProject(pack: ModrinthHit) {
+    selectedProject = pack;
+    selectedProjectDetails = null;
+    void loadVersions(pack.projectId);
+    try {
+      selectedProjectDetails = (await getModDetails([pack.projectId]))[0] ?? null;
+    } catch (cause) {
+      error = messageFromError(cause);
+    }
   }
 
   async function chooseImport() {
@@ -138,16 +148,12 @@
   }
 
   async function runImport(selected: ModpackFileInspection, allowForeignMods: boolean) {
-    importing = true;
     error = "";
     try {
-      const created = await importModpackFile(selected.path, allowForeignMods);
+      await onimportfile(selected, allowForeignMods);
       inspection = null;
-      await onimport(created);
     } catch (cause) {
       error = messageFromError(cause);
-    } finally {
-      importing = false;
     }
   }
 </script>
@@ -183,9 +189,29 @@
 </form>
 
 {#if error}
-  <div class="mb-5 border border-red-400/25 bg-red-400/[0.08] px-4 py-3 text-xs text-red-200">
+  <div class="error-banner mb-5 px-4 py-3 text-xs">
     {error}
   </div>
+{/if}
+
+{#if selectedProject}
+  <ModrinthProjectDialog
+    project={selectedProject}
+    details={selectedProjectDetails}
+    versions={versionsByProject[selectedProject.projectId] ?? []}
+    versionsLoading={loadingVersions[selectedProject.projectId] ?? false}
+    selectedVersionId={selectedVersions[selectedProject.projectId] ?? ""}
+    busy={busyProjectId === selectedProject.projectId}
+    actionLabel="Install modpack"
+    onloadversions={() => loadVersions(selectedProject!.projectId)}
+    onversionchange={(versionId) =>
+      (selectedVersions = {
+        ...selectedVersions,
+        [selectedProject!.projectId]: versionId,
+      })}
+    onaction={() => install(selectedProject!)}
+    onclose={() => (selectedProject = null)}
+  />
 {/if}
 
 {#if inspection}
@@ -270,7 +296,7 @@
           {/if}
           <div class="min-w-0 flex-1">
             <button
-              onclick={() => openProject(pack.slug)}
+              onclick={() => openProject(pack)}
               class="block max-w-full truncate text-left text-base font-bold text-[#eff9ff] hover:text-cyan-300 hover:underline"
             >
               {pack.title}

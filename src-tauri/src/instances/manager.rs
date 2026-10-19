@@ -8,7 +8,7 @@ pub fn instance_dir(paths: &PathManager, id: &str) -> Result<PathBuf, CommandErr
 }
 
 pub fn ensure_default(paths: &PathManager) -> Result<(), CommandError> {
-    let marker = paths.root().join(".instances-initialized");
+    let marker = paths.content_root().join(".instances-initialized");
     if marker.is_file() {
         return Ok(());
     }
@@ -65,6 +65,9 @@ pub fn save(paths: &PathManager, instance: &InstanceConfig) -> Result<(), Comman
         return Err(CommandError::new(
             "This Minecraft version is not supported by Ninja Launcher.",
         ));
+    }
+    if !matches!(instance.loader.as_str(), "fabric" | "vanilla") {
+        return Err(CommandError::new("The selected game type is invalid."));
     }
     validate_version(&instance.loader_version)?;
     if instance.name.trim().is_empty() {
