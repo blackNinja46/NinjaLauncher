@@ -9,6 +9,7 @@ use crate::{
     minecraft::metadata::{self, AssetIndex, Download, Library, VersionManifest, VersionMetadata},
     minecraft::processes::GameProcesses,
     modrinth::{client::ModrinthClient, resolver},
+    process::hide_tokio_console,
     storage::{config, paths::PathManager},
 };
 use serde::{Deserialize, Serialize};
@@ -832,8 +833,7 @@ async fn start_process(
         game.push(address.into());
     }
     let mut command = tokio::process::Command::new(java);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    hide_tokio_console(&mut command);
     command
         .args(jvm.into_iter().map(&replace))
         .arg(

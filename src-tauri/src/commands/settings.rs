@@ -3,6 +3,7 @@ use crate::{
     error::CommandError,
     instances::manager,
     java,
+    process::hide_std_console,
     storage::{config, config::LauncherSettings, paths::PathManager},
 };
 use tauri::State;
@@ -35,10 +36,9 @@ pub async fn inspect_java_runtime(
 fn total_memory_mb() -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("/usr/sbin/sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()?;
+        let mut command = std::process::Command::new("/usr/sbin/sysctl");
+        hide_std_console(&mut command);
+        let output = command.args(["-n", "hw.memsize"]).output().ok()?;
         let bytes: u64 = String::from_utf8_lossy(&output.stdout)
             .trim()
             .parse()
@@ -59,9 +59,13 @@ fn total_memory_mb() -> Option<u64> {
     }
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("powershell")
+        let mut command = std::process::Command::new("powershell");
+        hide_std_console(&mut command);
+        let output = command
             .args([
+                "-NoLogo",
                 "-NoProfile",
+                "-NonInteractive",
                 "-Command",
                 "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory",
             ])

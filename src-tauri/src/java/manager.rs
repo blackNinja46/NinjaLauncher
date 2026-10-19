@@ -1,10 +1,16 @@
 use crate::{
     downloads::manager::{self, DownloadSpec},
     error::CommandError,
+    process::hide_tokio_console,
     storage::paths::PathManager,
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+const RUNTIME_INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
 struct Platform {
@@ -234,12 +240,15 @@ async fn supports(candidate: &Path, required_major: u32, required_arch: &str) ->
 
 async fn runtime_details(candidate: &Path) -> Option<(String, u32, &'static str)> {
     let mut command = tokio::process::Command::new(candidate);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let Ok(output) = command
-        .args(["-XshowSettings:properties", "-version"])
-        .output()
-        .await
+    hide_tokio_console(&mut command);
+    command.kill_on_drop(true);
+    let Ok(Ok(output)) = tokio::time::timeout(
+        RUNTIME_INSPECTION_TIMEOUT,
+        command
+            .args(["-XshowSettings:properties", "-version"])
+            .output(),
+    )
+    .await
     else {
         return None;
     };
